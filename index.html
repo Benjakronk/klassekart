@@ -403,6 +403,31 @@
             text-align: center;
             font-weight: 500;
             flex-shrink: 0; /* Prevent header from shrinking */
+            position: relative;
+        }
+
+        .add-student-btn {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            border-radius: 50%;
+            font-size: 18px;
+            line-height: 1;
+            background-color: rgba(255,255,255,0.3);
+            color: var(--on-primary);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .add-student-btn:hover {
+            background-color: rgba(255,255,255,0.5);
         }
         
         .pool-content {
@@ -412,19 +437,40 @@
         }
         
         .student-item {
-            background-color: var(--surface-light);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            padding: 12px;
-            margin-bottom: 8px;
-            text-align: center;
-            cursor: grab;
-            transition: all 0.2s ease;
+            position: relative;
+            padding-right: 28px; /* Add space for the delete button */
         }
         
-        .student-item:hover {
-            background-color: #e8eaf6;
-            border-color: var(--primary-light);
+        .delete-student-btn {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 18px;
+            height: 18px;
+            padding: 0;
+            border-radius: 50%;
+            font-size: 12px;
+            line-height: 1;
+            background-color: rgba(244, 67, 54, 0.1);
+            color: var(--error);
+            border: 1px solid var(--error);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.2s, background-color 0.2s;
+            z-index: 10; /* Ensure it's above other elements */
+        }
+        
+        .student-item:hover .delete-student-btn {
+            opacity: 1;
+        }
+        
+        .delete-student-btn:hover {
+            background-color: var(--error);
+            color: white;
         }
         
         .empty-pool {
@@ -631,6 +677,40 @@
     <div class="app-header">
         <h1 class="app-title">Benjamins Klassekartograf</h1>
     </div>
+
+    <div class="modal-overlay" id="classNameModal">
+        <div class="modal-container" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Endre klassenavn</h2>
+                <button class="modal-close" onclick="toggleClassNameModal(false)">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label for="classNameInput" style="display: block; margin-bottom: 8px;">Klassenavn:</label>
+                <input type="text" id="classNameInput" style="width: 100%; padding: 8px; margin-bottom: 15px; border-radius: 6px; border: 1px solid var(--border-color);" placeholder="Skriv inn klassenavn...">
+            </div>
+            <div class="modal-footer">
+                <button onclick="toggleClassNameModal(false)">Avbryt</button>
+                <button onclick="saveClassName()" style="background-color: var(--secondary);">Lagre</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="modal-overlay" id="addStudentsModal">
+        <div class="modal-container" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Legg til elever</h2>
+                <button class="modal-close" onclick="toggleAddStudentsModal(false)">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label for="studentsInput" style="display: block; margin-bottom: 8px;">Elevnavn (en per linje):</label>
+                <textarea id="studentsInput" rows="10" style="width: 100%; padding: 8px; margin-bottom: 15px; border-radius: 6px; border: 1px solid var(--border-color);" placeholder="Skriv inn elevnavn (en per linje)..."></textarea>
+            </div>
+            <div class="modal-footer">
+                <button onclick="toggleAddStudentsModal(false)">Avbryt</button>
+                <button onclick="addStudentsToPool()" style="background-color: var(--secondary);">Legg til</button>
+            </div>
+        </div>
+    </div>
     
     <div class="app-container">
         <!-- Fully scrollable sidebar -->
@@ -648,6 +728,10 @@
                     <button onclick="exportPDF()" class="tooltip">
                         <span class="btn-icon">📄</span>Last ned klassekart
                         <span class="tooltip-text">Lagre nåværende klassekart som PDF</span>
+                    </button>
+                    <button onclick="toggleClassNameModal(true)" class="tooltip">
+                        <span class="btn-icon">✏️</span>Endre klassenavn
+                        <span class="tooltip-text">Endre navn på klassen</span>
                     </button>
                     <button onclick="resetWalkthrough()" class="tooltip">
                         <span class="btn-icon">❓</span>Vis veiledning
@@ -771,7 +855,7 @@
                 
                 const poolHeader = document.createElement('div');
                 poolHeader.className = 'pool-header';
-                poolHeader.textContent = 'Elever';
+                poolHeader.innerHTML = 'Elever <button class="add-student-btn" onclick="toggleAddStudentsModal(true)" title="Legg til elever">+</button>';
                 
                 const poolContent = document.createElement('div');
                 poolContent.className = 'pool-content';
@@ -788,11 +872,37 @@
             if (poolStudents.length === 0) {
                 poolContent.innerHTML = '<div class="empty-pool">Ingen tilgjengelige elever</div>';
             } else {
-                poolStudents.forEach(student => {
+                poolStudents.forEach((student, index) => {
                     const studentElement = document.createElement('div');
                     studentElement.className = 'student-item';
                     studentElement.textContent = student;
                     studentElement.setAttribute('data-student', student);
+                    
+                    // Add delete button
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'delete-student-btn';
+                    deleteBtn.innerHTML = '×';
+                    deleteBtn.title = 'Fjern elev';
+                    
+                    // Use mousedown instead of click to prevent drag conflict
+                    deleteBtn.addEventListener('mousedown', function(e) {
+                        e.stopPropagation(); // Prevent triggering drag
+                        e.preventDefault(); // Prevent default behavior
+                        
+                        // Remove the student
+                        const studentToRemove = poolStudents[index];
+                        poolStudents.splice(index, 1);
+                        
+                        // Update the pool display using setTimeout to avoid event conflicts
+                        setTimeout(() => {
+                            updateStudentPool();
+                            showNotification(`Fjernet ${studentToRemove} fra elevlisten`);
+                        }, 10);
+                        
+                        return false;
+                    });
+                    
+                    studentElement.appendChild(deleteBtn);
                     poolContent.appendChild(studentElement);
                 });
             }
@@ -800,6 +910,86 @@
             // Setup drag events after updating the pool
             setupStudentDragEvents();
         }
+
+        // Function to remove a student from the pool
+        function removeStudentFromPool(index) {
+            // Get student name for notification
+            const studentName = poolStudents[index];
+            
+            // Remove the student
+            poolStudents.splice(index, 1);
+            
+            // Update the pool and show notification
+            updateStudentPool();
+            showNotification(`Fjernet ${studentName} fra elevlisten`);
+        }
+
+    // Function to handle class name modal
+    function toggleClassNameModal(show) {
+        const modal = document.getElementById('classNameModal');
+        if (show) {
+            modal.classList.add('show');
+            document.getElementById('classNameInput').value = groupName;
+            setTimeout(() => document.getElementById('classNameInput').focus(), 100);
+        } else {
+            modal.classList.remove('show');
+        }
+    }
+
+    // Function to save the class name
+    function saveClassName() {
+        const newName = document.getElementById('classNameInput').value.trim();
+        if (newName) {
+            groupName = newName;
+            document.getElementById('groupName').textContent = groupName;
+            showNotification(`Klassenavn endret til "${groupName}"`);
+        }
+        toggleClassNameModal(false);
+    }
+
+    // Function to handle add students modal
+    function toggleAddStudentsModal(show) {
+        const modal = document.getElementById('addStudentsModal');
+        if (show) {
+            modal.classList.add('show');
+            setTimeout(() => document.getElementById('studentsInput').focus(), 100);
+        } else {
+            modal.classList.remove('show');
+        }
+    }
+
+    // Function to add students to the pool
+    function addStudentsToPool() {
+        const input = document.getElementById('studentsInput').value;
+        const newStudents = input.split('\n')
+            .map(name => name.trim())
+            .filter(name => name.length > 0);
+        
+        if (newStudents.length > 0) {
+            poolStudents = [...poolStudents, ...newStudents];
+            updateStudentPool();
+            showNotification(`La til ${newStudents.length} nye elever`);
+            toggleAddStudentsModal(false);
+            document.getElementById('studentsInput').value = '';
+        } else {
+            showNotification("Ingen gyldige elevnavn ble lagt til");
+        }
+    }
+
+    // Add keyboard events for the modals
+    document.getElementById('classNameInput').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            saveClassName();
+        } else if (e.key === 'Escape') {
+            toggleClassNameModal(false);
+        }
+    });
+
+    document.getElementById('studentsInput').addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            toggleAddStudentsModal(false);
+        }
+    });
         
         function updateRowConfigs() {
             rows = parseInt(document.getElementById('rows').value);
@@ -1126,8 +1316,16 @@
         }
         
         function exportPDF() {
-            if (groupName === "Please Load Student List") {
-                showNotification("Klassekartet er tomt");
+            // Check if there's a valid class name and any students
+            if (groupName === "Please Load Student List" || groupName === "Last inn elever for å begynne") {
+                showNotification("Sett et klassenavn først");
+                return;
+            }
+            
+            // Check if there are any students (either placed or in pool)
+            const hasStudents = poolStudents.length > 0 || gridCells.some(cell => cell.student);
+            if (!hasStudents) {
+                showNotification("Legg til minst én elev først");
                 return;
             }
             
@@ -1282,12 +1480,8 @@
                         pdf.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2], 0.7);
                         const iconSize = 3;
                         pdf.rect(x + (scaledCellWidth - iconSize*2)/2, y + 4, iconSize*2, iconSize, 'F');
-                    } else {
-                        // Empty desk styling - add a subtle marker
-                        pdf.setFillColor(200, 200, 200, 0.3);
-                        const iconSize = 3;
-                        pdf.rect(x + (scaledCellWidth - iconSize*2)/2, y + 4, iconSize*2, iconSize, 'F');
-                    }
+                    } 
+                    // No special styling for empty desks - they will remain blank
                     
                     currentCell++;
                 }
@@ -1502,35 +1696,29 @@
         
         // Handle student item mouse down
         function handleStudentMouseDown(e) {
-            // Prevent default behavior
+            // Skip if clicked on the delete button
+            if (e.target.classList.contains('delete-student-btn')) {
+                return;
+            }
+            
+            // Rest of your original code...
             e.preventDefault();
-            
-            // Get student name
             const studentName = this.getAttribute('data-student');
-            
-            // Find student in pool
             const index = poolStudents.indexOf(studentName);
             if (index !== -1) {
-                // Remove from pool
                 dragging = studentName;
                 poolStudents.splice(index, 1);
-                
-                // Update DOM
                 updateStudentPool();
                 
-                // Calculate drag offset relative to canvas
                 const canvasRect = document.getElementById('defaultCanvas0').getBoundingClientRect();
                 const itemRect = this.getBoundingClientRect();
                 
-                // Convert client coordinates to canvas coordinates
                 const canvasX = e.clientX - canvasRect.left;
                 const canvasY = e.clientY - canvasRect.top;
                 
-                // Set drag offset (center of the item)
                 dragOffset.x = (cellWidth * zoomFactor) / 2;
                 dragOffset.y = (cellHeight * zoomFactor) / 2;
                 
-                // Set mouse position to ensure the item appears at cursor
                 mouseX = canvasX;
                 mouseY = canvasY;
             }
@@ -1624,7 +1812,7 @@
                         <h3>Trinn 1: Last inn elevlisten din</h3>
                         <p>Start med å laste inn elevlisten din fra en tekstfil:</p>
                         <ul>
-                            <li>Klikk på "Last inn elever"-knappen</li>
+                            <li>Klikk på "Last inn elevene"-knappen</li>
                             <li>Velg en tekstfil med gruppenavnet på første linje</li>
                             <li>Hvert elevnavn bør være på separate linjer etter gruppenavnet</li>
                         </ul>
@@ -1633,8 +1821,8 @@
                     
                     <!-- Step 3: Grid Setup -->
                     <div class="walkthrough-step" data-step="3">
-                        <h3>Trinn 2: Konfigurer klasseroms-oppsettet</h3>
-                        <p>Tilpass klasseroms-oppsettet i Innstillinger-panelet:</p>
+                        <h3>Trinn 2: Konfigurer klasseromsoppsettet</h3>
+                        <p>Tilpass klasseromsoppsettet i Innstillinger-panelet:</p>
                         <ul>
                             <li>Angi antall rader</li>
                             <li>Juster avstand mellom rader og pulter</li>
