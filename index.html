@@ -1,0 +1,1731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Klassekartograf</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        :root {
+            /* Light Theme Colors */
+            --background: #f5f7fa;
+            --surface: #ffffff;
+            --surface-light: #f0f2f5;
+            --primary: #3f51b5;
+            --primary-light: #7986cb;
+            --primary-dark: #303f9f;
+            --secondary: #4caf50;
+            --error: #f44336;
+            --on-background: #333333;
+            --on-surface: #424242;
+            --on-primary: #ffffff;
+            --on-secondary: #ffffff;
+            --on-error: #ffffff;
+            --border-color: #e0e0e0;
+            --sidebar-width: 280px;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', 'Roboto', sans-serif;
+        }
+        
+        html, body {
+            height: 100%;
+            overflow: hidden;
+        }
+        
+        body {
+            background-color: var(--background);
+            color: var(--on-background);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .app-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            background-color: var(--primary);
+            color: var(--on-primary);
+            border-bottom: 1px solid var(--border-color);
+            z-index: 10;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            flex-shrink: 0; /* Prevent header from shrinking */
+        }
+        
+        .app-title {
+            font-weight: 500;
+            font-size: 1.5rem;
+        }
+        
+        .app-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        /* Make the entire sidebar scrollable */
+        .sidebar {
+            width: var(--sidebar-width);
+            background-color: var(--surface);
+            border-right: 1px solid var(--border-color);
+            overflow-y: auto; /* Make entire sidebar scrollable */
+            overflow-x: hidden;
+            padding: 15px;
+            position: relative;
+            z-index: 5;
+            box-shadow: 2px 0 5px rgba(0, 0, 0, 0.05);
+            flex-shrink: 0; /* Prevent sidebar from shrinking */
+        }
+        
+        .main-content {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+            background-color: var(--background);
+        }
+        
+        #groupName {
+            font-size: 2rem;
+            font-weight: 600;
+            text-align: center;
+            padding: 10px 0;
+            color: var(--primary-dark);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 5;
+            background-color: rgba(245, 247, 250, 0.8);
+        }
+        
+        #canvasContainer {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+        
+        .panel {
+            background-color: var(--surface);
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            border: 1px solid var(--border-color);
+            margin-bottom: 15px;
+        }
+        
+        .panel-title {
+            font-size: 1.1rem;
+            font-weight: 500;
+            margin-bottom: 12px;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+        }
+        
+        .panel-title .icon {
+            margin-right: 8px;
+            font-size: 1.3rem;
+        }
+        
+        .button-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        
+        .settings-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        
+        .setting-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .setting-label {
+            font-size: 0.85rem;
+            margin-bottom: 5px;
+            color: var(--on-surface);
+            opacity: 0.8;
+        }
+        
+        #rowConfigs {
+            max-height: 250px;
+            overflow-y: auto;
+            margin-top: 10px;
+            padding: 5px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background-color: var(--surface-light);
+        }
+        
+        .row-config {
+            display: flex;
+            align-items: center;
+            background-color: var(--surface);
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            transition: all 0.2s ease;
+            border: 1px solid var(--border-color);
+        }
+        
+        .row-config:hover {
+            border-color: var(--primary-light);
+            background-color: #f5f5f5;
+        }
+        
+        .row-number {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background-color: var(--primary);
+            color: var(--on-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+        
+        button {
+            background-color: var(--primary);
+            color: var(--on-primary);
+            border: none;
+            padding: 10px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        button:hover {
+            background-color: var(--primary-dark);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        button.active {
+            background-color: var(--primary-dark);
+        }
+        
+        .btn-icon {
+            margin-right: 6px;
+            font-size: 1.1rem;
+        }
+        
+        input[type="file"] {
+            display: none;
+        }
+        
+        .file-upload {
+            background-color: var(--primary);
+            color: var(--on-primary);
+            padding: 10px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .file-upload:hover {
+            background-color: var(--primary-dark);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        input[type="number"] {
+            background-color: var(--surface);
+            color: var(--on-surface);
+            border: 1px solid var(--border-color);
+            padding: 8px 12px;
+            border-radius: 6px;
+            width: 100%;
+            transition: all 0.2s ease;
+        }
+        
+        input[type="number"]:focus {
+            border-color: var(--primary);
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(63, 81, 181, 0.25);
+        }
+        
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: var(--surface-light);
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: var(--primary-light);
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--primary);
+        }
+        
+        .tooltip {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .tooltip .tooltip-text {
+            visibility: hidden;
+            width: 200px;
+            background-color: var(--on-background);
+            color: var(--surface);
+            text-align: center;
+            border-radius: 6px;
+            padding: 10px;
+            position: absolute;
+            z-index: 1000;
+            bottom: 125%;
+            left: 50%;
+            transform: translateX(-50%);
+            opacity: 0;
+            transition: opacity 0.3s;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            font-size: 0.85rem;
+        }
+        
+        .tooltip:hover .tooltip-text {
+            visibility: visible;
+            opacity: 1;
+        }
+        
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: var(--primary);
+            color: var(--on-primary);
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transform: translateY(-100px);
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+        
+        .notification.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .keyboard-shortcuts {
+            font-size: 0.8rem;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid var(--border-color);
+        }
+        
+        .shortcut {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+        
+        .shortcut-key {
+            background-color: var(--surface-light);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            border: 1px solid var(--border-color);
+        }
+        
+        /* Icons */
+        .icon {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            stroke-width: 0;
+            stroke: currentColor;
+            fill: currentColor;
+            line-height: 1;
+        }
+        
+        /* Student pool styling with scroll */
+        .student-pool {
+            position: absolute;
+            left: 20px;
+            top: 80px;
+            width: 220px; /* Fixed width */
+            max-height: calc(100% - 100px); /* Limit height to ensure it's within view */
+            background-color: var(--surface);
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            border: 1px solid var(--border-color);
+            z-index: 4;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .pool-header {
+            background-color: var(--primary);
+            color: var(--on-primary);
+            padding: 10px;
+            border-radius: 10px 10px 0 0;
+            text-align: center;
+            font-weight: 500;
+            flex-shrink: 0; /* Prevent header from shrinking */
+        }
+        
+        .pool-content {
+            padding: 10px;
+            overflow-y: auto; /* Make this area scrollable */
+            flex-grow: 1; /* Allow this to grow and take available space */
+        }
+        
+        .student-item {
+            background-color: var(--surface-light);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 8px;
+            text-align: center;
+            cursor: grab;
+            transition: all 0.2s ease;
+        }
+        
+        .student-item:hover {
+            background-color: #e8eaf6;
+            border-color: var(--primary-light);
+        }
+        
+        .empty-pool {
+            padding: 30px 0;
+            text-align: center;
+            color: #888;
+            font-style: italic;
+        }
+        
+        /* Responsive design adjustments */
+        @media (max-width: 1200px) {
+            .sidebar {
+                width: 250px;
+            }
+            
+            .student-pool {
+                width: 200px;
+            }
+        }
+        
+        @media (max-width: 900px) {
+            .sidebar {
+                width: 220px;
+            }
+            
+            .student-pool {
+                width: 180px;
+            }
+            
+            .settings-group {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        @media (max-height: 800px) {
+            .panel {
+                padding: 10px;
+                margin-bottom: 10px;
+            }
+            
+            .panel-title {
+                margin-bottom: 8px;
+                padding-bottom: 5px;
+            }
+            
+            .button-group {
+                margin-bottom: 8px;
+            }
+            
+            #rowConfigs {
+                max-height: 200px;
+            }
+        }
+
+        /* CSS for Walkthrough Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s, visibility 0.3s;
+        }
+
+        .modal-overlay.show {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal-container {
+            background-color: var(--surface);
+            border-radius: 10px;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            position: relative;
+            overflow: hidden;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-header {
+            padding: 15px 20px;
+            background-color: var(--primary);
+            color: var(--on-primary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 1.2rem;
+            font-weight: 500;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--on-primary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            transition: background-color 0.2s;
+        }
+
+        .modal-close:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .modal-footer {
+            padding: 15px 20px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .modal-image {
+            max-width: 100%;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            margin: 15px 0;
+        }
+
+        .walkthrough-step {
+            display: none;
+        }
+
+        .walkthrough-step.active {
+            display: block;
+        }
+
+        .walkthrough-step ul {
+            padding-left: 20px;
+            margin: 10px 0;
+        }
+
+        .walkthrough-step li {
+            margin-bottom: 8px;
+        }
+
+        .step-indicator {
+            display: flex;
+            justify-content: center;
+            margin-top: 10px;
+        }
+
+        .step-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: var(--border-color);
+            margin: 0 5px;
+            transition: background-color 0.2s;
+            cursor: pointer;
+        }
+
+        .step-dot.active {
+            background-color: var(--primary);
+        }
+
+        .highlight-area {
+            position: absolute;
+            border: 2px solid var(--primary);
+            border-radius: 5px;
+            box-shadow: 0 0 0 1000px rgba(0, 0, 0, 0.5);
+            z-index: 1001;
+            pointer-events: none;
+            transition: all 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-header">
+        <h1 class="app-title">Klassekartograf</h1>
+    </div>
+    
+    <div class="app-container">
+        <!-- Fully scrollable sidebar -->
+        <div class="sidebar">
+            <div class="panel">
+                <h2 class="panel-title">
+                    <span class="icon">📋</span>Handlinger
+                </h2>
+                <div class="button-group">
+                    <label class="file-upload tooltip">
+                        <span class="btn-icon">📂</span>Last inn elever
+                        <input type="file" id="fileInput" accept=".txt">
+                        <span class="tooltip-text">Last opp en .txt-fil med elevnavn på separate linjer</span>
+                    </label>
+                    <button onclick="exportPDF()" class="tooltip">
+                        <span class="btn-icon">📄</span>Last ned klassekart
+                        <span class="tooltip-text">Lagre nåværende klassekart som PDF</span>
+                    </button>
+                </div>
+                <div class="button-group">
+                    <button onclick="resetGrid()" class="tooltip">
+                        <span class="btn-icon">🔄</span>Tilbakestill klassekart
+                        <span class="tooltip-text">Fjern alle plasseringer</span>
+                    </button>
+                    <button onclick="randomizePlacements()" class="tooltip">
+                        <span class="btn-icon">🎲</span>Tilfeldig plassering
+                        <span class="tooltip-text">Plasser elever tilfeldig (R)</span>
+                    </button>
+                    <button onclick="toggleLinkMode()" id="linkModeBtn" class="tooltip">
+                        <span class="btn-icon">🔗</span>Lenkemodus: AV
+                        <span class="tooltip-text">Koble sammen/frakoble pulter (L)</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <h2 class="panel-title">
+                    <span class="icon">⚙️</span>Innstillinger
+                </h2>
+                <div class="settings-group">
+                    <div class="setting-item">
+                        <label class="setting-label">Antall rader</label>
+                        <input type="number" id="rows" value="4" min="1" max="10" onchange="updateRowConfigs()">
+                    </div>
+                    <div class="setting-item">
+                        <label class="setting-label">Mellom rader</label>
+                        <input type="number" id="rowSpacing" value="60" min="0" max="200" onchange="updateGrid()">
+                    </div>
+                    <div class="setting-item">
+                        <label class="setting-label">Mellom pulter</label>
+                        <input type="number" id="deskSpacing" value="30" min="0" max="100" onchange="updateGrid()">
+                    </div>
+                </div>
+                
+                <h3 class="panel-title" style="font-size: 0.95rem; margin-top: 15px; margin-bottom: 5px;">
+                    <span class="icon">🪑</span>Pulter per rad
+                </h3>
+                <div id="rowConfigs"></div>
+                
+                <div class="keyboard-shortcuts">
+                    <h3 style="margin-bottom: 8px; font-size: 0.9rem; opacity: 0.7;">Hurtigtaster</h3>
+                    <div class="shortcut">
+                        <span>Lenkemodus</span>
+                        <span class="shortcut-key">L</span>
+                    </div>
+                    <div class="shortcut">
+                        <span>Tilfeldig plassering</span>
+                        <span class="shortcut-key">R</span>
+                    </div>
+                    <div class="shortcut">
+                        <span>Avbryt flytting</span>
+                        <span class="shortcut-key">Esc</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div id="groupName">Last inn elever for å begynne</div>
+            <div id="canvasContainer"></div>
+        </div>
+    </div>
+    
+    <div id="notification" class="notification"></div>
+    
+    <script>
+        // Canvas state variables
+        let students = [];
+        let gridCells = [];
+        let dragging = null;
+        let dragOffset = { x: 0, y: 0 };
+        let rows = 5;
+        let rowSpacing = 60;
+        let deskSpacing = 30;
+        let cellWidth = 120;
+        let cellHeight = 80;
+        let poolWidth = 220; // Match with CSS
+        let poolStudents = [];
+        let groupName = "Please Load Student List";
+        let linkMode = false;
+        let links = new Set();
+        let linkStart = null;
+        let rowSizes = [6, 6, 6, 6, 6]; // Default sizes for each row
+        let zoomFactor = 1; // Scale factor for responsive sizing
+        let studentPool = null; // Reference to the student pool DOM element
+
+        // Shows notification message
+        function showNotification(message, duration = 2000) {
+            const notification = document.getElementById('notification');
+            notification.textContent = message;
+            notification.classList.add('show');
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, duration);
+        }
+
+        // Update the student pool DOM
+        function updateStudentPool() {
+            if (!studentPool) {
+                // Create student pool if it doesn't exist
+                studentPool = document.createElement('div');
+                studentPool.className = 'student-pool';
+                studentPool.id = 'studentPool';
+                
+                const poolHeader = document.createElement('div');
+                poolHeader.className = 'pool-header';
+                poolHeader.textContent = 'Elever';
+                
+                const poolContent = document.createElement('div');
+                poolContent.className = 'pool-content';
+                poolContent.id = 'poolContent';
+                
+                studentPool.appendChild(poolHeader);
+                studentPool.appendChild(poolContent);
+                document.querySelector('.main-content').appendChild(studentPool);
+            }
+            
+            const poolContent = document.getElementById('poolContent');
+            poolContent.innerHTML = '';
+            
+            if (poolStudents.length === 0) {
+                poolContent.innerHTML = '<div class="empty-pool">Ingen tilgjengelig elever</div>';
+            } else {
+                poolStudents.forEach(student => {
+                    const studentElement = document.createElement('div');
+                    studentElement.className = 'student-item';
+                    studentElement.textContent = student;
+                    studentElement.setAttribute('data-student', student);
+                    poolContent.appendChild(studentElement);
+                });
+            }
+            
+            // Setup drag events after updating the pool
+            setupStudentDragEvents();
+        }
+        
+        function updateRowConfigs() {
+            rows = parseInt(document.getElementById('rows').value);
+            const configsDiv = document.getElementById('rowConfigs');
+            configsDiv.innerHTML = '';
+            
+            while (rowSizes.length < rows) rowSizes.push(6);
+            if (rowSizes.length > rows) rowSizes.length = rows;
+            
+            for (let i = 0; i < rows; i++) {
+                const rowDiv = document.createElement('div');
+                rowDiv.className = 'row-config';
+                rowDiv.innerHTML = `
+                    <div class="row-number">${i + 1}</div>
+                    <input type="number" 
+                           value="${rowSizes[i]}" 
+                           min="1" 
+                           max="12"
+                           onchange="updateRowSize(${i}, this.value)">
+                `;
+                configsDiv.appendChild(rowDiv);
+            }
+            updateGrid();
+        }
+        
+        function updateRowSize(rowIndex, size) {
+            rowSizes[rowIndex] = parseInt(size);
+            updateGrid();
+        }
+        
+        // Adjust cell sizes based on available space
+        function adjustCellSize() {
+            const mainContent = document.querySelector('.main-content');
+            const maxWidth = mainContent.offsetWidth;
+            const maxHeight = mainContent.offsetHeight;
+            
+            // Calculate the maximum grid width and height
+            const maxDesksInRow = Math.max(...rowSizes);
+            const gridWidth = maxDesksInRow * cellWidth + (maxDesksInRow - 1) * deskSpacing;
+            const gridHeight = rows * cellHeight + (rows - 1) * rowSpacing;
+            
+            // Calculate scaling factors
+            const xFactor = (maxWidth - poolWidth - 80) / gridWidth;
+            const yFactor = (maxHeight - 100) / gridHeight;
+            
+            // Use the smaller factor to maintain aspect ratio
+            zoomFactor = Math.min(xFactor, yFactor, 1); // Cap at 1 to avoid oversizing
+            
+            // Update pool width based on sidebar width
+            const sidebar = document.querySelector('.sidebar');
+            poolWidth = Math.min(220, sidebar.offsetWidth - 40); // Match pool width to sidebar
+            
+            // Update pool position and width in CSS
+            if (studentPool) {
+                studentPool.style.width = `${poolWidth}px`;
+            }
+        }
+        
+        let myCanvas;
+        
+        function setup() {
+        console.log("p5.js setup running...");
+        
+        // Create canvas inside the canvasContainer
+        myCanvas = createCanvas(
+            document.querySelector('.main-content').offsetWidth,
+            document.querySelector('.main-content').offsetHeight
+        );
+        myCanvas.parent('canvasContainer');
+        
+        // Now that canvas is initialized, we can safely call these functions
+        console.log("Canvas initialized, setting up grid...");
+        adjustCellSize();
+        updateRowConfigs();
+        updateStudentPool();
+        
+        console.log("Grid setup complete");
+    }
+        
+        function getCellPosition(row, col) {
+        // Apply zoom factor to maintain responsive layout
+        const scaledCellWidth = cellWidth * zoomFactor;
+        const scaledCellHeight = cellHeight * zoomFactor;
+        const scaledRowSpacing = rowSpacing * zoomFactor;
+        const scaledDeskSpacing = deskSpacing * zoomFactor;
+        
+        let additionalSpace = 0;
+        for (let c = 0; c < col; c++) {
+            const linkKey = `${row},${c}-${row},${c+1}`;
+            const reverseLinkKey = `${row},${c+1}-${row},${c}`;
+            if (!links.has(linkKey) && !links.has(reverseLinkKey)) {
+                additionalSpace += scaledDeskSpacing;
+            }
+        }
+
+        // Calculate row offset to center the row
+        const rowWidth = rowSizes[row] * scaledCellWidth + 
+                    (rowSizes[row] - 1) * (10 * zoomFactor + scaledDeskSpacing);
+        const maxRowWidth = Math.max(...rowSizes) * scaledCellWidth + 
+                        (Math.max(...rowSizes) - 1) * (10 * zoomFactor + scaledDeskSpacing);
+        const rowOffset = (maxRowWidth - rowWidth) / 2;
+
+        // Center the grid in the canvas, avoiding student pool
+        // Use the canvas element's width instead of p5.js width if not available yet
+        const canvasWidth = (typeof width !== 'undefined') ? width : 
+                        document.querySelector('.main-content').offsetWidth;
+        const centerX = canvasWidth / 2 + poolWidth/4;
+        const gridStartX = centerX - maxRowWidth / 2; 
+
+        return {
+            x: gridStartX + rowOffset + col * (scaledCellWidth + 10 * zoomFactor) + additionalSpace,
+            y: 80 + row * (scaledCellHeight + scaledRowSpacing)
+        };
+    }
+        
+        function updateGrid() {
+        rowSpacing = parseInt(document.getElementById('rowSpacing').value);
+        deskSpacing = parseInt(document.getElementById('deskSpacing').value);
+        
+        // Adjust cell sizes based on available space
+        adjustCellSize();
+        
+        // Save the current student assignments before rebuilding grid
+        const studentAssignments = {};
+        for (let cell of gridCells) {
+            if (cell.student) {
+                // Use row,col as key to store student assignments
+                studentAssignments[`${cell.row},${cell.col}`] = cell.student;
+            }
+        }
+        
+        // Rebuild grid cells
+        gridCells = [];
+        
+        for (let i = 0; i < rowSizes.length; i++) {
+            for (let j = 0; j < rowSizes[i]; j++) {
+                const pos = getCellPosition(i, j);
+                const key = `${i},${j}`;
+                
+                gridCells.push({
+                    x: pos.x,
+                    y: pos.y,
+                    row: i,
+                    col: j,
+                    // Restore student assignment or set to null if none
+                    student: studentAssignments[key] || null
+                });
+            }
+        }
+    }
+        
+        function toggleLinkMode() {
+            linkMode = !linkMode;
+            document.getElementById('linkModeBtn').textContent = `🔗 Lenkemodus: ${linkMode ? 'PÅ' : 'AV'}`;
+            document.getElementById('linkModeBtn').classList.toggle('active', linkMode);
+            linkStart = null;
+            if (linkMode) {
+                showNotification("Lenkemodus aktivert. Trykk på koblingspunktene for å sammen-/frakoble pulter.");
+            }
+        }
+        
+        function handleLinkModeClick() {
+            const scaledCellWidth = cellWidth * zoomFactor;
+            const scaledCellHeight = cellHeight * zoomFactor;
+            
+            for (let cell of gridCells) {
+                if (dist(mouseX, mouseY, cell.x + scaledCellWidth, cell.y + scaledCellHeight/2) < 10 * zoomFactor) {
+                    if (!linkStart) {
+                        linkStart = `${cell.row},${cell.col}`;
+                    }
+                    return;
+                }
+                if (dist(mouseX, mouseY, cell.x, cell.y + scaledCellHeight/2) < 10 * zoomFactor) {
+                    if (linkStart) {
+                        const linkEnd = `${cell.row},${cell.col}`;
+                        if (linkStart !== linkEnd) {
+                            const [startRow, startCol] = linkStart.split(',').map(Number);
+                            const [endRow, endCol] = linkEnd.split(',').map(Number);
+                            
+                            if (startRow === endRow && Math.abs(startCol - endCol) === 1) {
+                                const link = `${linkStart}-${linkEnd}`;
+                                const reverseLink = `${linkEnd}-${linkStart}`;
+                                if (links.has(link)) {
+                                    links.delete(link);
+                                    showNotification("Pulter koblet fra hverandre");
+                                } else if (links.has(reverseLink)) {
+                                    links.delete(reverseLink);
+                                    showNotification("Pulter koblet fra hverandre");
+                                } else {
+                                    links.add(link);
+                                    showNotification("Pulter koblet sammen");
+                                }
+                                updateGrid(); // Update grid to reflect new spacing
+                            } else {
+                                showNotification("Kun nabopulter på samme rad kan kobles sammen", 1500);
+                            }
+                        }
+                        linkStart = null;
+                    }
+                    return;
+                }
+            }
+            linkStart = null;
+        }
+        
+        // Fixed mouse interaction for canvas
+        function mousePressed() {
+            if (!mouseInCanvas()) return;
+            
+            if (linkMode) {
+                handleLinkModeClick();
+                return;
+            }
+
+            const scaledCellWidth = cellWidth * zoomFactor;
+            const scaledCellHeight = cellHeight * zoomFactor;
+            
+            // Check grid cells
+            for (let cell of gridCells) {
+                if (mouseX > cell.x && mouseX < cell.x + scaledCellWidth &&
+                    mouseY > cell.y && mouseY < cell.y + scaledCellHeight && cell.student) {
+                    dragging = cell.student;
+                    cell.student = null;
+                    dragOffset.x = (mouseX - cell.x) / zoomFactor;
+                    dragOffset.y = (mouseY - cell.y) / zoomFactor;
+                    updateStudentPool(); // Update the pool DOM
+                    return;
+                }
+            }
+        }
+        
+        function mouseReleased() {
+            if (!dragging) return;
+            
+            const scaledCellWidth = cellWidth * zoomFactor;
+            const scaledCellHeight = cellHeight * zoomFactor;
+            
+            let placed = false;
+            for (let cell of gridCells) {
+                if (mouseX > cell.x && mouseX < cell.x + scaledCellWidth &&
+                    mouseY > cell.y && mouseY < cell.y + scaledCellHeight) {
+                    if (cell.student) {
+                        poolStudents.push(cell.student);
+                    }
+                    cell.student = dragging;
+                    placed = true;
+                    break;
+                }
+            }
+            if (!placed) {
+                poolStudents.push(dragging);
+            }
+            dragging = null;
+            updateStudentPool(); // Update the pool DOM
+        }
+        
+        // Helper function to check if mouse is in canvas
+        function mouseInCanvas() {
+            const canvas = document.getElementById('defaultCanvas0');
+            if (!canvas) return false;
+            
+            const rect = canvas.getBoundingClientRect();
+            return (
+                mouseX >= 0 && 
+                mouseX < width && 
+                mouseY >= 0 && 
+                mouseY < height
+            );
+        }
+        
+        function randomizePlacements() {
+            const allStudents = [...poolStudents];
+            for (let cell of gridCells) {
+                if (cell.student) {
+                    allStudents.push(cell.student);
+                    cell.student = null;
+                }
+            }
+            
+            if (allStudents.length === 0) {
+                showNotification("Ingen elever å plassere");
+                return;
+            }
+            
+            const availableCells = [...gridCells];
+            while (allStudents.length > 0 && availableCells.length > 0) {
+                const studentIndex = Math.floor(Math.random() * allStudents.length);
+                const cellIndex = Math.floor(Math.random() * availableCells.length);
+                
+                availableCells[cellIndex].student = allStudents[studentIndex];
+                availableCells.splice(cellIndex, 1);
+                allStudents.splice(studentIndex, 1);
+            }
+            
+            poolStudents = allStudents;
+            updateStudentPool(); // Update the pool DOM
+            showNotification("Plasserte elever tilfeldig!");
+        }
+        
+        function resetGrid() {
+            for (let cell of gridCells) {
+                if (cell.student) {
+                    poolStudents.push(cell.student);
+                    cell.student = null;
+                }
+            }
+            links.clear();
+            updateGrid();
+            updateStudentPool(); // Update the pool DOM
+            showNotification("Tilbakestilte klassekart");
+        }
+        
+        function exportPDF() {
+            if (groupName === "Please Load Student List") {
+                showNotification("Klassekartet er tomt");
+                return;
+            }
+            
+            const { jsPDF } = window.jspdf;
+            const pdf = new jsPDF({
+                orientation: 'landscape',
+                unit: 'mm',
+                format: 'a3'
+            });
+            
+            const pageWidth = 420;
+            const pageHeight = 297;
+            const margin = 20;
+            const headerSpace = 30;
+
+            pdf.setFontSize(28);
+            pdf.setFont(undefined, 'bold');
+            pdf.text(groupName, pageWidth/2, margin, { align: 'center' });
+            
+            const availableWidth = pageWidth - 2 * margin;
+            const availableHeight = pageHeight - 2 * margin - headerSpace;
+            
+            const maxDesksInRow = Math.max(...rowSizes);
+            let totalGridWidth = maxDesksInRow * cellWidth;
+            for (let i = 0; i < maxDesksInRow - 1; i++) {
+                totalGridWidth += deskSpacing;
+            }
+            const totalGridHeight = rows * cellHeight + (rows - 1) * rowSpacing;
+            
+            const scaleX = availableWidth / totalGridWidth;
+            const scaleY = availableHeight / totalGridHeight;
+            const scale = Math.min(scaleX, scaleY);
+            
+            const scaledCellWidth = cellWidth * scale;
+            const scaledCellHeight = cellHeight * scale;
+            const scaledRowSpacing = rowSpacing * scale;
+            const scaledDeskSpacing = deskSpacing * scale;
+            
+            const startY = margin + headerSpace;
+            
+            // Draw cells row by row
+            let currentCell = 0;
+            for (let row = 0; row < rowSizes.length; row++) {
+                const rowWidth = rowSizes[row] * scaledCellWidth + (rowSizes[row] - 1) * scaledDeskSpacing;
+                const startX = (pageWidth - rowWidth) / 2;
+                
+                // Draw cells in this row
+                for (let col = 0; col < rowSizes[row]; col++) {
+                    const cell = gridCells[currentCell];
+                    let x = startX + col * (scaledCellWidth + scaledDeskSpacing);
+                    const y = startY + row * (scaledCellHeight + scaledRowSpacing);
+                    
+                    // Draw desk
+                    pdf.rect(x, y, scaledCellWidth, scaledCellHeight);
+                    
+                    // Draw student name
+                    if (cell && cell.student) {
+                        pdf.setFontSize(16);
+                        pdf.setFont(undefined, 'normal');
+                        pdf.text(cell.student,
+                            x + scaledCellWidth/2,
+                            y + scaledCellHeight/2,
+                            { align: 'center', baseline: 'middle' });
+                    }
+                    
+                    currentCell++;
+                }
+                
+                // Draw links in this row
+                for (let link of links) {
+                    const [cell1Pos, cell2Pos] = link.split('-').map(pos => {
+                        const [r, c] = pos.split(',').map(Number);
+                        if (r !== row) return null;
+                        
+                        let x = startX + c * (scaledCellWidth + scaledDeskSpacing);
+                        
+                        return {
+                            x: x,
+                            y: startY + r * (scaledCellHeight + scaledRowSpacing)
+                        };
+                    }).filter(pos => pos !== null);
+                    
+                    if (cell1Pos && cell2Pos) {
+                        pdf.setLineWidth(0.5);
+                        pdf.line(cell1Pos.x + scaledCellWidth, cell1Pos.y + scaledCellHeight/2,
+                                cell2Pos.x, cell2Pos.y + scaledCellHeight/2);
+                    }
+                }
+            }
+            
+            pdf.save('seating_arrangement.pdf');
+            showNotification("PDF er lastet ned!");
+        }
+        
+        function draw() {
+            background(245, 247, 250); // Light background color
+            
+            const scaledCellWidth = cellWidth * zoomFactor;
+            const scaledCellHeight = cellHeight * zoomFactor;
+            
+            // Draw links between desks
+            stroke(63, 81, 181, 180); // Primary color
+            strokeWeight(4 * zoomFactor);
+            for (let link of links) {
+                const [cell1, cell2] = link.split('-').map(pos => {
+                    const [row, col] = pos.split(',').map(Number);
+                    return getCellPosition(row, col);
+                });
+                line(cell1.x + scaledCellWidth, cell1.y + scaledCellHeight/2, 
+                     cell2.x, cell2.y + scaledCellHeight/2);
+            }
+            
+            // Draw grid cells
+            strokeWeight(1 * zoomFactor);
+            for (let cell of gridCells) {
+                const isHighlighted = linkMode && 
+                    (dist(mouseX, mouseY, cell.x + scaledCellWidth, cell.y + scaledCellHeight/2) < 10 * zoomFactor ||
+                     dist(mouseX, mouseY, cell.x, cell.y + scaledCellHeight/2) < 10 * zoomFactor);
+                
+                if (isHighlighted) {
+                    fill(240, 240, 240);
+                    stroke(63, 81, 181);
+                    strokeWeight(2 * zoomFactor);
+                } else {
+                    fill(255, 255, 255);
+                    stroke(224, 224, 224);
+                    strokeWeight(1 * zoomFactor);
+                }
+                
+                // Shadow effect for cells
+                noStroke();
+                fill(0, 0, 0, 10);
+                rect(cell.x + 3 * zoomFactor, cell.y + 3 * zoomFactor, scaledCellWidth, scaledCellHeight, 8 * zoomFactor);
+                
+                // Cell itself
+                if (isHighlighted) {
+                    fill(240, 240, 240);
+                    stroke(63, 81, 181);
+                    strokeWeight(2 * zoomFactor);
+                } else {
+                    fill(255, 255, 255);
+                    stroke(224, 224, 224);
+                    strokeWeight(1 * zoomFactor);
+                }
+                rect(cell.x, cell.y, scaledCellWidth, scaledCellHeight, 8 * zoomFactor);
+                
+                if (cell.student) {
+                    fill(66, 66, 66); // Dark text for better contrast
+                    noStroke();
+                    textAlign(CENTER, CENTER);
+                    textSize(14 * zoomFactor);
+                    text(cell.student, cell.x + scaledCellWidth/2, cell.y + scaledCellHeight/2);
+                }
+                
+                // Show link points in link mode
+                if (linkMode) {
+                    const leftHighlight = dist(mouseX, mouseY, cell.x, cell.y + scaledCellHeight/2) < 10 * zoomFactor;
+                    const rightHighlight = dist(mouseX, mouseY, cell.x + scaledCellWidth, cell.y + scaledCellHeight/2) < 10 * zoomFactor;
+                    
+                    // Left connection point
+                    if (leftHighlight) {
+                        fill(63, 81, 181);
+                        stroke(255, 255, 255, 100);
+                        strokeWeight(2 * zoomFactor);
+                    } else {
+                        fill(200, 200, 200);
+                        noStroke();
+                    }
+                    circle(cell.x, cell.y + scaledCellHeight/2, 10 * zoomFactor);
+                    
+                    // Right connection point
+                    if (rightHighlight) {
+                        fill(63, 81, 181);
+                        stroke(255, 255, 255, 100);
+                        strokeWeight(2 * zoomFactor);
+                    } else {
+                        fill(200, 200, 200);
+                        noStroke();
+                    }
+                    circle(cell.x + scaledCellWidth, cell.y + scaledCellHeight/2, 10 * zoomFactor);
+                    
+                    // Show active link start
+                    if (linkStart === `${cell.row},${cell.col}`) {
+                        stroke(63, 81, 181);
+                        strokeWeight(2 * zoomFactor);
+                        noFill();
+                        circle(cell.x + scaledCellWidth, cell.y + scaledCellHeight/2, 15 * zoomFactor);
+                    }
+                }
+            }
+            
+            // Draw dragging student
+            if (dragging) {
+                // Shadow effect for dragged item
+                noStroke();
+                fill(0, 0, 0, 20);
+                rect(mouseX - dragOffset.x * zoomFactor + 5 * zoomFactor, 
+                     mouseY - dragOffset.y * zoomFactor + 5 * zoomFactor, 
+                     scaledCellWidth, scaledCellHeight, 8 * zoomFactor);
+                
+                // Dragged item
+                fill(121, 134, 203); // Lighter primary color
+                stroke(63, 81, 181);
+                strokeWeight(2 * zoomFactor);
+                rect(mouseX - dragOffset.x * zoomFactor, 
+                     mouseY - dragOffset.y * zoomFactor, 
+                     scaledCellWidth, scaledCellHeight, 8 * zoomFactor);
+                
+                fill(255, 255, 255); // White text on colored background
+                noStroke();
+                textAlign(CENTER, CENTER);
+                textSize(14 * zoomFactor);
+                text(dragging, 
+                     mouseX - dragOffset.x * zoomFactor + scaledCellWidth/2, 
+                     mouseY - dragOffset.y * zoomFactor + scaledCellHeight/2);
+                
+                // Show "drop zone" highlight
+                for (let cell of gridCells) {
+                    if (mouseX > cell.x && mouseX < cell.x + scaledCellWidth &&
+                        mouseY > cell.y && mouseY < cell.y + scaledCellHeight) {
+                        noFill();
+                        stroke(63, 81, 181);
+                        strokeWeight(3 * zoomFactor);
+                        rect(cell.x, cell.y, scaledCellWidth, scaledCellHeight, 8 * zoomFactor);
+                        break;
+                    }
+                }
+            }
+            
+            // Draw link in progress
+            if (linkStart && linkMode) {
+                const [startRow, startCol] = linkStart.split(',').map(Number);
+                const startPos = getCellPosition(startRow, startCol);
+                stroke(63, 81, 181, 150);
+                strokeWeight(3 * zoomFactor);
+                line(startPos.x + scaledCellWidth, startPos.y + scaledCellHeight/2, mouseX, mouseY);
+            }
+        }
+        
+        // Setup drag events for student items
+        function setupStudentDragEvents() {
+            // Get all student items
+            const studentItems = document.querySelectorAll('.student-item');
+            
+            studentItems.forEach(item => {
+                // Remove any existing event listeners
+                item.removeEventListener('mousedown', handleStudentMouseDown);
+                
+                // Add new event listener
+                item.addEventListener('mousedown', handleStudentMouseDown);
+            });
+        }
+        
+        // Handle student item mouse down
+        function handleStudentMouseDown(e) {
+            // Prevent default behavior
+            e.preventDefault();
+            
+            // Get student name
+            const studentName = this.getAttribute('data-student');
+            
+            // Find student in pool
+            const index = poolStudents.indexOf(studentName);
+            if (index !== -1) {
+                // Remove from pool
+                dragging = studentName;
+                poolStudents.splice(index, 1);
+                
+                // Update DOM
+                updateStudentPool();
+                
+                // Calculate drag offset relative to canvas
+                const canvasRect = document.getElementById('defaultCanvas0').getBoundingClientRect();
+                const itemRect = this.getBoundingClientRect();
+                
+                // Convert client coordinates to canvas coordinates
+                const canvasX = e.clientX - canvasRect.left;
+                const canvasY = e.clientY - canvasRect.top;
+                
+                // Set drag offset (center of the item)
+                dragOffset.x = (cellWidth * zoomFactor) / 2;
+                dragOffset.y = (cellHeight * zoomFactor) / 2;
+                
+                // Set mouse position to ensure the item appears at cursor
+                mouseX = canvasX;
+                mouseY = canvasY;
+            }
+        }
+        
+        // File input handling
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const text = e.target.result;
+                    const lines = text.split('\n')
+                        .map(name => name.trim())
+                        .filter(name => name.length > 0);
+                    
+                    if (lines.length > 0) {
+                        groupName = lines[0];
+                        document.getElementById('groupName').textContent = groupName;
+                        poolStudents = lines.slice(1);
+                        resetGrid();
+                        updateStudentPool();
+                        showNotification(`Lastet inn ${poolStudents.length} elever fra ${file.name}`);
+                    } else {
+                        showNotification("Filen ser ut til å være tom");
+                    }
+                };
+                reader.readAsText(file);
+            }
+        });
+        
+        function windowResized() {
+            resizeCanvas(
+                document.querySelector('.main-content').offsetWidth,
+                document.querySelector('.main-content').offsetHeight
+            );
+            updateGrid(); // This will also call adjustCellSize()
+        }
+        
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'l' || e.key === 'L') {
+                toggleLinkMode();
+            } else if (e.key === 'r' || e.key === 'R') {
+                randomizePlacements();
+            } else if (e.key === 'Escape') {
+                if (linkMode) {
+                    toggleLinkMode();
+                }
+                linkStart = null;
+                if (dragging) {
+                    poolStudents.push(dragging);
+                    dragging = null;
+                    updateStudentPool();
+                    showNotification("Handling avbrutt");
+                }
+            }
+        });
+        
+        function setupWalkthrough() {
+        console.log("setupWalkthrough function called");
+        
+        // For testing: Always show the walkthrough
+        localStorage.removeItem('seatingWalkthroughSeen');
+        
+        // Create modal HTML
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal-container">
+                <div class="modal-header">
+                    <h2 class="modal-title">Velkommen til Klassekartograf</h2>
+                    <button class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <!-- Step 1: Introduction -->
+                    <div class="walkthrough-step active" data-step="1">
+                        <h3>Velkommen!</h3>
+                        <p>Dette verktøyet hjelper deg å lage og administrere klassekart enkelt. La oss gjennomgå hovedfunksjonene:</p>
+                        <img class="modal-image" src="/api/placeholder/400/250" alt="Oversikt over applikasjonen">
+                        <p>Denne korte gjennomgangen vil vise deg hvordan du bruker alle nøkkelfunksjonene.</p>
+                    </div>
+                    
+                    <!-- Step 2: Loading Students -->
+                    <div class="walkthrough-step" data-step="2">
+                        <h3>Trinn 1: Last inn elevlisten din</h3>
+                        <p>Start med å laste inn elevlisten din fra en tekstfil:</p>
+                        <ul>
+                            <li>Klikk på "Last inn elever"-knappen</li>
+                            <li>Velg en tekstfil med gruppenavnet på første linje</li>
+                            <li>Hvert elevnavn bør være på separate linjer etter gruppenavnet</li>
+                        </ul>
+                        <p>Når de er lastet inn, vil elevene vises i "Elever"-panelet til venstre.</p>
+                    </div>
+                    
+                    <!-- Step 3: Grid Setup -->
+                    <div class="walkthrough-step" data-step="3">
+                        <h3>Trinn 2: Konfigurer klasseroms-oppsettet</h3>
+                        <p>Tilpass klasseroms-oppsettet i Innstillinger-panelet:</p>
+                        <ul>
+                            <li>Angi antall rader</li>
+                            <li>Juster avstand mellom rader og pulter</li>
+                            <li>Konfigurer hvor mange pulter som er i hver rad</li>
+                        </ul>
+                        <p>Rutenettet vil automatisk oppdateres for å gjenspeile innstillingene dine.</p>
+                    </div>
+                    
+                    <!-- Step 4: Placing Students -->
+                    <div class="walkthrough-step" data-step="4">
+                        <h3>Trinn 3: Arranger elevene dine</h3>
+                        <p>Du kan plassere elever på to måter:</p>
+                        <ul>
+                            <li>Dra elever fra Elever-panelet til en tom pult</li>
+                            <li>Klikk på "Tilfeldig plassering"-knappen for å automatisk tildele elever tilfeldige seter</li>
+                        </ul>
+                        <p>For å flytte en elev, bare dra dem til en annen pult eller tilbake til elevlisten.</p>
+                    </div>
+                    
+                    <!-- Step 5: Linking Desks -->
+                    <div class="walkthrough-step" data-step="5">
+                        <h3>Trinn 4: Koble pulter sammen</h3>
+                        <p>Du kan koble sammen pulter som står ved siden av hverandre:</p>
+                        <ul>
+                            <li>Klikk på "Lenkemodus"-knappen for å aktivere lenkemodus</li>
+                            <li>Klikk på koblingspunktene (sirkler) som vises på sidene av pultene</li>
+                            <li>Du kan bare koble pulter som er ved siden av hverandre i samme rad</li>
+                            <li>Klikk på de samme punktene igjen for å frakoble pulter</li>
+                        </ul>
+                        <p>Trykk ESC eller klikk på "Lenkemodus"-knappen igjen for å avslutte lenkemodus.</p>
+                    </div>
+                    
+                    <!-- Step 6: Exporting -->
+                    <div class="walkthrough-step" data-step="6">
+                        <h3>Trinn 5: Eksporter klassekartet ditt</h3>
+                        <p>Når du er fornøyd med plasseringen av elevene:</p>
+                        <ul>
+                            <li>Klikk på "Last ned klassekart"-knappen for å lagre oppsettet ditt</li>
+                            <li>PDF-en vil inkludere gruppenavnet, alle elevplasseringer og pultlenker</li>
+                        </ul>
+                    </div>
+
+                    <!-- Step 7: Keyboard Shortcuts -->
+                    <div class="walkthrough-step" data-step="7">
+                        <h3>Hurtigtaster</h3>
+                        <p>Effektiviser arbeidsflyten din med disse nyttige hurtigtastene:</p>
+                        <ul>
+                            <li><strong>L</strong> - Slå lenkemodus av/på</li>
+                            <li><strong>R</strong> - Tilfeldig plassering av elever</li>
+                            <li><strong>ESC</strong> - Avbryt gjeldende operasjon</li>
+                        </ul>
+                        <p>Nå er du klar! Klikk "Fullfør" for å begynne å bruke applikasjonen.</p>
+                    </div>
+                    
+                    <div class="step-indicator">
+                        <span class="step-dot active" data-step="1"></span>
+                        <span class="step-dot" data-step="2"></span>
+                        <span class="step-dot" data-step="3"></span>
+                        <span class="step-dot" data-step="4"></span>
+                        <span class="step-dot" data-step="5"></span>
+                        <span class="step-dot" data-step="6"></span>
+                        <span class="step-dot" data-step="7"></span>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="prevStepBtn" class="btn">Forrige</button>
+                    <button id="nextStepBtn" class="btn">Neste</button>
+                </div>
+            </div>
+        `;
+        
+        console.log("Modal HTML created");
+        document.body.appendChild(modal);
+        console.log("Modal added to DOM");
+        
+        // Highlight elements for each step (optional)
+        const highlights = {
+            2: document.querySelector('.file-upload'), // Load Students button
+            3: document.getElementById('rowConfigs'),  // Grid settings
+            4: document.getElementById('studentPool'), // Student pool
+            5: document.getElementById('linkModeBtn'), // Link mode button
+            6: document.querySelector('.button-group button:nth-child(2)') // Export PDF button
+        };
+        
+        // Create highlight element if needed
+        const highlightEl = document.createElement('div');
+        highlightEl.className = 'highlight-area';
+        highlightEl.style.display = 'none';
+        document.body.appendChild(highlightEl);
+        
+        // Show modal after a slight delay
+        setTimeout(() => {
+            console.log("Making modal visible");
+            modal.classList.add('show');
+        }, 100);
+        
+        // Track current step
+        let currentStep = 1;
+        const totalSteps = document.querySelectorAll('.walkthrough-step').length;
+        console.log(`Total steps: ${totalSteps}`);
+        
+        // Get button references
+        const nextBtn = document.getElementById('nextStepBtn');
+        const prevBtn = document.getElementById('prevStepBtn');
+        const closeBtn = modal.querySelector('.modal-close');
+        
+        if (!nextBtn || !prevBtn) {
+            console.error("Could not find navigation buttons");
+            return;
+        }
+        
+        // Update button states based on current step
+        function updateButtons() {
+            console.log(`Updating buttons for step ${currentStep}`);
+            prevBtn.style.visibility = currentStep === 1 ? 'hidden' : 'visible';
+            nextBtn.textContent = currentStep === totalSteps ? 'Fullfør' : 'Neste';
+        }
+        
+        // Show a specific step
+        function showStep(step) {
+            console.log(`Showing step ${step}`);
+            
+            // Hide all steps
+            document.querySelectorAll('.walkthrough-step').forEach(el => {
+                el.classList.remove('active');
+            });
+            
+            // Show current step
+            const currentStepEl = document.querySelector(`.walkthrough-step[data-step="${step}"]`);
+            if (currentStepEl) {
+                currentStepEl.classList.add('active');
+            } else {
+                console.error(`Could not find step element for step ${step}`);
+            }
+            
+            // Update step indicators
+            document.querySelectorAll('.step-dot').forEach(dot => {
+                dot.classList.remove('active');
+            });
+            
+            const currentDot = document.querySelector(`.step-dot[data-step="${step}"]`);
+            if (currentDot) {
+                currentDot.classList.add('active');
+            } else {
+                console.error(`Could not find dot indicator for step ${step}`);
+            }
+            
+            // Update buttons
+            updateButtons();
+            
+            // Handle highlighting (optional)
+            highlightEl.style.display = 'none';
+            if (highlights[step]) {
+                const el = highlights[step];
+                if (el) {
+                    const rect = el.getBoundingClientRect();
+                    
+                    highlightEl.style.display = 'block';
+                    highlightEl.style.top = `${rect.top - 5}px`;
+                    highlightEl.style.left = `${rect.left - 5}px`;
+                    highlightEl.style.width = `${rect.width + 10}px`;
+                    highlightEl.style.height = `${rect.height + 10}px`;
+                }
+            }
+        }
+        
+        // Function to close walkthrough
+        function closeWalkthrough() {
+            console.log("Closing walkthrough");
+            // Remove modal
+            modal.classList.remove('show');
+            setTimeout(() => {
+                modal.remove();
+                highlightEl.remove();
+            }, 300);
+            
+            // Set as seen in localStorage
+            localStorage.setItem('seatingWalkthroughSeen', 'true');
+        }
+        
+        // Next button event
+        nextBtn.addEventListener('click', () => {
+            console.log("Next button clicked");
+            if (currentStep < totalSteps) {
+                currentStep++;
+                showStep(currentStep);
+            } else {
+                // Last step - close modal
+                closeWalkthrough();
+            }
+        });
+        
+        // Previous button event
+        prevBtn.addEventListener('click', () => {
+            console.log("Previous button clicked");
+            if (currentStep > 1) {
+                currentStep--;
+                showStep(currentStep);
+            }
+        });
+        
+        // Close button event
+        closeBtn.addEventListener('click', closeWalkthrough);
+        
+        // Step indicator clicks
+        document.querySelectorAll('.step-dot').forEach(dot => {
+            dot.addEventListener('click', () => {
+                currentStep = parseInt(dot.getAttribute('data-step'));
+                showStep(currentStep);
+            });
+        });
+        
+        // Initialize
+        updateButtons();
+        
+        // Add button to sidebar to show walkthrough again
+        const helpButton = document.createElement('button');
+        helpButton.innerHTML = '<span class="btn-icon">❓</span>Vis veiledning';
+        helpButton.className = 'tooltip';
+        helpButton.style.marginTop = '15px';
+        
+        const tooltip = document.createElement('span');
+        tooltip.className = 'tooltip-text';
+        tooltip.textContent = 'Vis veiledningen igjen';
+        helpButton.appendChild(tooltip);
+        
+        helpButton.addEventListener('click', () => {
+            // Remove existing modal if it exists
+            const existingModal = document.querySelector('.modal-overlay');
+            if (existingModal) existingModal.remove();
+            
+            // Show walkthrough again
+            setupWalkthrough();
+        });
+        
+        // Add to DOM at the bottom of the first panel
+        const firstPanel = document.querySelector('.panel');
+        if (firstPanel) {
+            firstPanel.appendChild(helpButton);
+        } else {
+            console.error("Could not find panel to add help button");
+        }
+        
+        console.log("Walkthrough setup complete");
+    }
+
+        // Initialize the grid on load
+        document.addEventListener('DOMContentLoaded', function() {
+        console.log("DOMContentLoaded event fired");
+        
+        // Handle window resize events
+        window.addEventListener('resize', windowResized);
+        
+        // Wait for p5.js to initialize before calling functions that depend on canvas
+        // The updateRowConfigs will now be called inside setup() instead
+        
+        // Setup walkthrough after a delay to ensure everything is loaded
+        setTimeout(function() {
+            console.log("Setting up walkthrough...");
+            setupWalkthrough();
+        }, 2000); // Increased timeout to 2000ms to ensure canvas is ready
+    });
+    </script>
+</body>
+</html>
