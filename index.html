@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Klassekartograf</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <style>
@@ -142,6 +143,13 @@
             flex-wrap: wrap;
             gap: 8px;
             margin-bottom: 12px;
+        }
+
+        .panel:first-of-type .button-group button,
+        .panel:first-of-type .button-group .file-upload {
+            width: 180px; /* Set a fixed width for all buttons */
+            justify-content: flex-start; /* Align text to the left */
+            padding-left: 16px; /* Add some padding on the left */
         }
         
         .settings-group {
@@ -478,7 +486,7 @@
             width: 100%;
             height: 100%;
             background-color: rgba(0, 0, 0, 0.5);
-            z-index: 1000;
+            z-index: 2000;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -595,12 +603,24 @@
             background-color: var(--primary);
         }
 
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(63, 81, 181, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(63, 81, 181, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(63, 81, 181, 0);
+            }
+        }
+
         .highlight-area {
             position: absolute;
             border: 2px solid var(--primary);
             border-radius: 5px;
             box-shadow: 0 0 0 1000px rgba(0, 0, 0, 0.5);
-            z-index: 1001;
+            z-index: 1500; /* Lower than modal z-index */
             pointer-events: none;
             transition: all 0.3s ease;
         }
@@ -627,6 +647,10 @@
                     <button onclick="exportPDF()" class="tooltip">
                         <span class="btn-icon">📄</span>Last ned klassekart
                         <span class="tooltip-text">Lagre nåværende klassekart som PDF</span>
+                    </button>
+                    <button onclick="resetWalkthrough()" class="tooltip">
+                        <span class="btn-icon">❓</span>Vis veiledning
+                        <span class="tooltip-text">Vis veiledningen igjen</span>
                     </button>
                 </div>
                 <div class="button-group">
@@ -684,6 +708,15 @@
                         <span class="shortcut-key">Esc</span>
                     </div>
                 </div>
+
+                <div class="credits">
+                    <h3 style="margin-bottom: 8px; font-size: 0.9rem; opacity: 0.7;">Credits</h3>
+                    <div class="shortcut">
+                        <a href="https://www.flaticon.com/free-icons/desk" title="desk icons">Desk icons created by Payungkead - Flaticon</a>
+                    </div>
+                </div>
+
+
             </div>
         </div>
         
@@ -752,7 +785,7 @@
             poolContent.innerHTML = '';
             
             if (poolStudents.length === 0) {
-                poolContent.innerHTML = '<div class="empty-pool">Ingen tilgjengelig elever</div>';
+                poolContent.innerHTML = '<div class="empty-pool">Ingen tilgjengelige elever</div>';
             } else {
                 poolStudents.forEach(student => {
                     const studentElement = document.createElement('div');
@@ -881,7 +914,7 @@
         };
     }
         
-        function updateGrid() {
+    function updateGrid() {
         rowSpacing = parseInt(document.getElementById('rowSpacing').value);
         deskSpacing = parseInt(document.getElementById('deskSpacing').value);
         
@@ -913,8 +946,21 @@
                     // Restore student assignment or set to null if none
                     student: studentAssignments[key] || null
                 });
+                
+                // Remove this assignment from our tracking object if it was used
+                if (studentAssignments[key]) {
+                    delete studentAssignments[key];
+                }
             }
         }
+        
+        // Any remaining students in studentAssignments are "orphaned" and should be returned to the pool
+        for (const key in studentAssignments) {
+            poolStudents.push(studentAssignments[key]);
+        }
+        
+        // Update the student pool DOM
+        updateStudentPool();
     }
         
         function toggleLinkMode() {
@@ -1426,9 +1472,15 @@
         
         function setupWalkthrough() {
         console.log("setupWalkthrough function called");
+
+        // Check if user has seen the walkthrough before
+        if (localStorage.getItem('seatingWalkthroughSeen') === 'true') {
+            console.log("User has seen walkthrough before, skipping");
+            return; // Skip walkthrough if already seen
+        }
         
-        // For testing: Always show the walkthrough
-        localStorage.removeItem('seatingWalkthroughSeen');
+        /* // For testing: Always show the walkthrough
+        localStorage.removeItem('seatingWalkthroughSeen'); */
         
         // Create modal HTML
         const modal = document.createElement('div');
@@ -1443,8 +1495,7 @@
                     <!-- Step 1: Introduction -->
                     <div class="walkthrough-step active" data-step="1">
                         <h3>Velkommen!</h3>
-                        <p>Dette verktøyet hjelper deg å lage og administrere klassekart enkelt. La oss gjennomgå hovedfunksjonene:</p>
-                        <img class="modal-image" src="/api/placeholder/400/250" alt="Oversikt over applikasjonen">
+                        <p>Dette verktøyet hjelper deg å lage og administrere klassekart enkelt.</p>
                         <p>Denne korte gjennomgangen vil vise deg hvordan du bruker alle nøkkelfunksjonene.</p>
                     </div>
                     
@@ -1467,18 +1518,18 @@
                         <ul>
                             <li>Angi antall rader</li>
                             <li>Juster avstand mellom rader og pulter</li>
-                            <li>Konfigurer hvor mange pulter som er i hver rad</li>
+                            <li>Angi hvor mange pulter som er i hver rad</li>
                         </ul>
-                        <p>Rutenettet vil automatisk oppdateres for å gjenspeile innstillingene dine.</p>
+                        <p>Klassekartet vil automatisk oppdateres for å gjenspeile innstillingene dine.</p>
                     </div>
                     
                     <!-- Step 4: Placing Students -->
                     <div class="walkthrough-step" data-step="4">
-                        <h3>Trinn 3: Arranger elevene dine</h3>
+                        <h3>Trinn 3: Plasser elevene dine</h3>
                         <p>Du kan plassere elever på to måter:</p>
                         <ul>
                             <li>Dra elever fra Elever-panelet til en tom pult</li>
-                            <li>Klikk på "Tilfeldig plassering"-knappen for å automatisk tildele elever tilfeldige seter</li>
+                            <li>Klikk på "Tilfeldig plassering"-knappen for å automatisk tildele elever tilfeldige plasser</li>
                         </ul>
                         <p>For å flytte en elev, bare dra dem til en annen pult eller tilbake til elevlisten.</p>
                     </div>
@@ -1489,7 +1540,7 @@
                         <p>Du kan koble sammen pulter som står ved siden av hverandre:</p>
                         <ul>
                             <li>Klikk på "Lenkemodus"-knappen for å aktivere lenkemodus</li>
-                            <li>Klikk på koblingspunktene (sirkler) som vises på sidene av pultene</li>
+                            <li>Klikk på koblingspunktet (sirkelen) på høyresiden av en pult, og trykk deretter på tilsvarende punkt på venstresiden av pulten ved siden av</li>
                             <li>Du kan bare koble pulter som er ved siden av hverandre i samme rad</li>
                             <li>Klikk på de samme punktene igjen for å frakoble pulter</li>
                         </ul>
@@ -1584,51 +1635,65 @@
         
         // Show a specific step
         function showStep(step) {
-            console.log(`Showing step ${step}`);
+    console.log(`Showing step ${step}`);
+    
+    // Hide all steps
+    document.querySelectorAll('.walkthrough-step').forEach(el => {
+        el.classList.remove('active');
+    });
+    
+    // Show current step
+    const currentStepEl = document.querySelector(`.walkthrough-step[data-step="${step}"]`);
+    if (currentStepEl) {
+        currentStepEl.classList.add('active');
+    } else {
+        console.error(`Could not find step element for step ${step}`);
+    }
+    
+    // Update step indicators
+    document.querySelectorAll('.step-dot').forEach(dot => {
+        dot.classList.remove('active');
+    });
+    
+    const currentDot = document.querySelector(`.step-dot[data-step="${step}"]`);
+    if (currentDot) {
+        currentDot.classList.add('active');
+    } else {
+        console.error(`Could not find dot indicator for step ${step}`);
+    }
+    
+    // Update buttons
+    updateButtons();
+    
+    // Modified highlighting approach: Don't use box-shadow during active walkthrough
+    highlightEl.style.display = 'none';
+    
+    // Only highlight elements on steps that should have highlights
+    // and don't apply highlighting on the first and last steps
+    if (highlights[step] && step > 1 && step < totalSteps) {
+        const el = highlights[step];
+        if (el) {
+            const rect = el.getBoundingClientRect();
             
-            // Hide all steps
-            document.querySelectorAll('.walkthrough-step').forEach(el => {
-                el.classList.remove('active');
-            });
+            // Use a different highlighting approach that won't overlay the modal
+            highlightEl.style.display = 'block';
+            highlightEl.style.top = `${rect.top - 5}px`;
+            highlightEl.style.left = `${rect.left - 5}px`;
+            highlightEl.style.width = `${rect.width + 10}px`;
+            highlightEl.style.height = `${rect.height + 10}px`;
             
-            // Show current step
-            const currentStepEl = document.querySelector(`.walkthrough-step[data-step="${step}"]`);
-            if (currentStepEl) {
-                currentStepEl.classList.add('active');
-            } else {
-                console.error(`Could not find step element for step ${step}`);
-            }
+            // Remove the box-shadow that causes darkening
+            highlightEl.style.boxShadow = 'none';
             
-            // Update step indicators
-            document.querySelectorAll('.step-dot').forEach(dot => {
-                dot.classList.remove('active');
-            });
-            
-            const currentDot = document.querySelector(`.step-dot[data-step="${step}"]`);
-            if (currentDot) {
-                currentDot.classList.add('active');
-            } else {
-                console.error(`Could not find dot indicator for step ${step}`);
-            }
-            
-            // Update buttons
-            updateButtons();
-            
-            // Handle highlighting (optional)
-            highlightEl.style.display = 'none';
-            if (highlights[step]) {
-                const el = highlights[step];
-                if (el) {
-                    const rect = el.getBoundingClientRect();
-                    
-                    highlightEl.style.display = 'block';
-                    highlightEl.style.top = `${rect.top - 5}px`;
-                    highlightEl.style.left = `${rect.left - 5}px`;
-                    highlightEl.style.width = `${rect.width + 10}px`;
-                    highlightEl.style.height = `${rect.height + 10}px`;
-                }
-            }
+            // Add a pulsing animation instead
+            highlightEl.style.animation = 'pulse 1.5s infinite';
+            highlightEl.style.border = '3px solid var(--primary)';
         }
+    } else {
+        // For first and last step, no highlighting
+        highlightEl.style.display = 'none';
+    }
+}
         
         // Function to close walkthrough
         function closeWalkthrough() {
@@ -1679,35 +1744,12 @@
         // Initialize
         updateButtons();
         
-        // Add button to sidebar to show walkthrough again
-        const helpButton = document.createElement('button');
-        helpButton.innerHTML = '<span class="btn-icon">❓</span>Vis veiledning';
-        helpButton.className = 'tooltip';
-        helpButton.style.marginTop = '15px';
-        
-        const tooltip = document.createElement('span');
-        tooltip.className = 'tooltip-text';
-        tooltip.textContent = 'Vis veiledningen igjen';
-        helpButton.appendChild(tooltip);
-        
-        helpButton.addEventListener('click', () => {
-            // Remove existing modal if it exists
-            const existingModal = document.querySelector('.modal-overlay');
-            if (existingModal) existingModal.remove();
-            
-            // Show walkthrough again
-            setupWalkthrough();
-        });
-        
-        // Add to DOM at the bottom of the first panel
-        const firstPanel = document.querySelector('.panel');
-        if (firstPanel) {
-            firstPanel.appendChild(helpButton);
-        } else {
-            console.error("Could not find panel to add help button");
-        }
-        
         console.log("Walkthrough setup complete");
+    }
+
+    function resetWalkthrough() {
+        localStorage.removeItem('seatingWalkthroughSeen');
+        setupWalkthrough()
     }
 
         // Initialize the grid on load
