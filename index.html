@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Klassekartograf</title>
+    <title>Benjamins Klassekartograf</title>
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -629,7 +629,7 @@
 </head>
 <body>
     <div class="app-header">
-        <h1 class="app-title">Klassekartograf</h1>
+        <h1 class="app-title">Benjamins Klassekartograf</h1>
     </div>
     
     <div class="app-container">
@@ -680,11 +680,11 @@
                         <input type="number" id="rows" value="4" min="1" max="10" onchange="updateRowConfigs()">
                     </div>
                     <div class="setting-item">
-                        <label class="setting-label">Mellom rader</label>
+                        <label class="setting-label">Avstand rader</label>
                         <input type="number" id="rowSpacing" value="60" min="0" max="200" onchange="updateGrid()">
                     </div>
                     <div class="setting-item">
-                        <label class="setting-label">Mellom pulter</label>
+                        <label class="setting-label">Avstand pulter</label>
                         <input type="number" id="deskSpacing" value="30" min="0" max="100" onchange="updateGrid()">
                     </div>
                 </div>
@@ -1138,18 +1138,48 @@
                 format: 'a3'
             });
             
+            // Page dimensions and layout settings
             const pageWidth = 420;
             const pageHeight = 297;
             const margin = 20;
-            const headerSpace = 30;
-
+            const headerSpace = 40;
+            const footerSpace = 15;
+            
+            // Colors (matching the app's color scheme)
+            const primaryColor = [63, 81, 181]; // RGB format for primary blue
+            const primaryLightColor = [121, 134, 203]; // Lighter blue
+            const borderColor = [224, 224, 224]; // Light gray for borders
+            const textColor = [66, 66, 66]; // Dark gray for text
+            
+            // Create date objects and strings
+            const today = new Date();
+            const displayDateStr = today.toLocaleDateString('no-NO', { 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+            });
+            const fileDateStr = today.toISOString().split('T')[0]; // Format as YYYY-MM-DD for filename
+            
+            // Add a header background
+            pdf.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+            pdf.rect(0, 0, pageWidth, headerSpace, 'F');
+            
+            // Add title text
             pdf.setFontSize(28);
-            pdf.setFont(undefined, 'bold');
-            pdf.text(groupName, pageWidth/2, margin, { align: 'center' });
+            pdf.setFont('helvetica', 'bold');
+            pdf.setTextColor(255, 255, 255); // White text on blue background
+            pdf.text(groupName, pageWidth/2, headerSpace/2 + 5, { align: 'center', baseline: 'middle' });
             
+            // Add subtitle with date
+            pdf.setFontSize(12);
+            pdf.setFont('helvetica', 'normal');
+            pdf.text(`Klassekart opprettet: ${displayDateStr}`, pageWidth/2, headerSpace - 8, { align: 'center' });
+            
+            // Calculate available space for the seating chart
             const availableWidth = pageWidth - 2 * margin;
-            const availableHeight = pageHeight - 2 * margin - headerSpace;
+            const availableHeight = pageHeight - 2 * margin - headerSpace - footerSpace;
             
+            // Calculate total grid dimensions
             const maxDesksInRow = Math.max(...rowSizes);
             let totalGridWidth = maxDesksInRow * cellWidth;
             for (let i = 0; i < maxDesksInRow - 1; i++) {
@@ -1157,16 +1187,42 @@
             }
             const totalGridHeight = rows * cellHeight + (rows - 1) * rowSpacing;
             
+            // Calculate scaling factors to fit the grid on the page
             const scaleX = availableWidth / totalGridWidth;
             const scaleY = availableHeight / totalGridHeight;
             const scale = Math.min(scaleX, scaleY);
             
+            // Scale dimensions
             const scaledCellWidth = cellWidth * scale;
             const scaledCellHeight = cellHeight * scale;
             const scaledRowSpacing = rowSpacing * scale;
             const scaledDeskSpacing = deskSpacing * scale;
             
+            // Start position for the grid
             const startY = margin + headerSpace;
+            
+            // Draw a background for the entire seating area
+            pdf.setFillColor(245, 247, 250); // Light background color matching app background
+            pdf.setDrawColor(borderColor[0], borderColor[1], borderColor[2]);
+            pdf.roundedRect(margin - 10, startY - 10, availableWidth + 20, availableHeight + 10, 5, 5, 'FD');
+            
+            // Add a legend for linked desks
+            pdf.setFillColor(245, 247, 250);
+            pdf.setDrawColor(borderColor[0], borderColor[1], borderColor[2]);
+            pdf.roundedRect(margin, pageHeight - footerSpace - 15, 100, 18, 3, 3, 'FD');
+            
+            // Legend text
+            pdf.setTextColor(textColor[0], textColor[1], textColor[2]);
+            pdf.setFontSize(10);
+            pdf.text("Sammenkoblede pulter:", margin + 5, pageHeight - footerSpace - 6);
+            
+            // Legend example line
+            pdf.setDrawColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+            pdf.setLineWidth(1.5);
+            pdf.line(margin + 50, pageHeight - footerSpace - 7, margin + 90, pageHeight - footerSpace - 7);
+            
+            // Set default text color for the rest of the document
+            pdf.setTextColor(textColor[0], textColor[1], textColor[2]);
             
             // Draw cells row by row
             let currentCell = 0;
@@ -1174,29 +1230,69 @@
                 const rowWidth = rowSizes[row] * scaledCellWidth + (rowSizes[row] - 1) * scaledDeskSpacing;
                 const startX = (pageWidth - rowWidth) / 2;
                 
+                // Add row label
+                pdf.setFontSize(12);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+                pdf.text(`Rad ${row + 1}`, margin, startY + row * (scaledCellHeight + scaledRowSpacing) + scaledCellHeight/2, {
+                    baseline: 'middle'
+                });
+                
                 // Draw cells in this row
                 for (let col = 0; col < rowSizes[row]; col++) {
                     const cell = gridCells[currentCell];
                     let x = startX + col * (scaledCellWidth + scaledDeskSpacing);
                     const y = startY + row * (scaledCellHeight + scaledRowSpacing);
                     
-                    // Draw desk
-                    pdf.rect(x, y, scaledCellWidth, scaledCellHeight);
+                    // Draw desk shadow
+                    pdf.setFillColor(0, 0, 0, 0.1); // Light shadow
+                    pdf.roundedRect(x + 1.5, y + 1.5, scaledCellWidth, scaledCellHeight, 3, 3, 'F');
                     
-                    // Draw student name
+                    // Draw desk background
+                    pdf.setFillColor(255, 255, 255); // White background
+                    pdf.setDrawColor(borderColor[0], borderColor[1], borderColor[2]);
+                    pdf.roundedRect(x, y, scaledCellWidth, scaledCellHeight, 3, 3, 'FD');
+                    
+                    // Draw student name with better formatting
                     if (cell && cell.student) {
-                        pdf.setFontSize(16);
-                        pdf.setFont(undefined, 'normal');
-                        pdf.text(cell.student,
-                            x + scaledCellWidth/2,
-                            y + scaledCellHeight/2,
-                            { align: 'center', baseline: 'middle' });
+                        // Draw a colored header bar for the desk
+                        pdf.setFillColor(primaryLightColor[0], primaryLightColor[1], primaryLightColor[2], 0.3);
+                        pdf.rect(x, y, scaledCellWidth, scaledCellHeight * 0.25, 'F');
+                        
+                        // Draw student name
+                        pdf.setTextColor(textColor[0], textColor[1], textColor[2]);
+                        pdf.setFontSize(11);
+                        pdf.setFont('helvetica', 'bold');
+                        
+                        // Handle long names with wrapping
+                        const textX = x + scaledCellWidth/2;
+                        const textY = y + scaledCellHeight/2 + 5;
+                        
+                        // Adjust font size for very long names
+                        const nameLength = cell.student.length;
+                        const fontSize = nameLength > 15 ? 9 : 11;
+                        pdf.setFontSize(fontSize);
+                        
+                        pdf.text(cell.student, textX, textY, { 
+                            align: 'center', 
+                            maxWidth: scaledCellWidth - 4
+                        });
+                        
+                        // Add a small desk icon on top
+                        pdf.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2], 0.7);
+                        const iconSize = 3;
+                        pdf.rect(x + (scaledCellWidth - iconSize*2)/2, y + 4, iconSize*2, iconSize, 'F');
+                    } else {
+                        // Empty desk styling - add a subtle marker
+                        pdf.setFillColor(200, 200, 200, 0.3);
+                        const iconSize = 3;
+                        pdf.rect(x + (scaledCellWidth - iconSize*2)/2, y + 4, iconSize*2, iconSize, 'F');
                     }
                     
                     currentCell++;
                 }
                 
-                // Draw links in this row
+                // Draw links in this row with improved styling
                 for (let link of links) {
                     const [cell1Pos, cell2Pos] = link.split('-').map(pos => {
                         const [r, c] = pos.split(',').map(Number);
@@ -1211,15 +1307,38 @@
                     }).filter(pos => pos !== null);
                     
                     if (cell1Pos && cell2Pos) {
-                        pdf.setLineWidth(0.5);
+                        // Draw nicer looking link between desks
+                        pdf.setDrawColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+                        pdf.setLineWidth(1.5);
                         pdf.line(cell1Pos.x + scaledCellWidth, cell1Pos.y + scaledCellHeight/2,
                                 cell2Pos.x, cell2Pos.y + scaledCellHeight/2);
+                        
+                        // Add small circles at connection points
+                        pdf.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+                        pdf.circle(cell1Pos.x + scaledCellWidth, cell1Pos.y + scaledCellHeight/2, 1.5, 'F');
+                        pdf.circle(cell2Pos.x, cell2Pos.y + scaledCellHeight/2, 1.5, 'F');
                     }
                 }
             }
             
-            pdf.save('seating_arrangement.pdf');
-            showNotification("PDF er lastet ned!");
+            // Add footer with page info
+            pdf.setDrawColor(primaryColor[0], primaryColor[1], primaryColor[2], 0.5);
+            pdf.setLineWidth(0.5);
+            pdf.line(margin, pageHeight - footerSpace + 5, pageWidth - margin, pageHeight - footerSpace + 5);
+            
+            pdf.setFontSize(9);
+            pdf.setTextColor(100, 100, 100);
+            pdf.text("Klassekartograf - Klasseromskart", margin, pageHeight - 7);
+            pdf.text("Side 1/1", pageWidth - margin, pageHeight - 7, { align: 'right' });
+            
+            // Create a file-friendly version of the class name
+            // Remove any characters that might cause problems in filenames
+            const cleanClassName = groupName.replace(/[\/\\:*?"<>|]/g, '_').trim();
+            
+            // Save the PDF with custom filename
+            const fileName = `${cleanClassName} ${fileDateStr}.pdf`;
+            pdf.save(fileName);
+            showNotification(`PDF "${fileName}" er lastet ned!`);
         }
         
         function draw() {
