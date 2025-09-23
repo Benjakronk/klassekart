@@ -113,7 +113,7 @@ function loadLayoutById(id) {
   const layout = layouts[id];
   if (!layout) return;
 
-  // CLEAR ALL EXISTING STATE FIRST
+  // COMPLETELY CLEAR ALL EXISTING STATE FIRST
   // Clear all grid cells
   for (let cell of gridCells) {
     cell.student = null;
@@ -129,8 +129,7 @@ function loadLayoutById(id) {
   dragging = null;
   linkStart = null;
 
-  // NOW APPLY THE SAVED LAYOUT
-  // Settings first
+  // NOW APPLY THE SAVED LAYOUT SETTINGS
   rows        = layout.settings.rows;
   rowSpacing  = layout.settings.rowSpacing;
   deskSpacing = layout.settings.deskSpacing;
@@ -147,12 +146,26 @@ function loadLayoutById(id) {
   
   // Apply links
   links = new Set(layout.links || []);
-  
-  // Set pool students (start with all students in pool)
-  poolStudents = [...layout.poolStudents];
 
-  // Rebuild grid with new settings, then apply placements
-  updateRowConfigs(true); // rebuild without autosave
+  // Rebuild the grid structure with cleared state
+  // We need to do this manually to avoid the updateGrid() function 
+  // adding orphaned students to the pool
+  gridCells = [];
+  for (let i = 0; i < rowSizes.length; i++) {
+    for (let j = 0; j < rowSizes[i]; j++) {
+      const pos = getCellPosition(i, j);
+      gridCells.push({
+        x: pos.x,
+        y: pos.y,
+        row: i,
+        col: j,
+        student: null // Start with all cells empty
+      });
+    }
+  }
+
+  // NOW set the pool students and apply placements
+  poolStudents = [...layout.poolStudents];
   
   // Apply student placements to grid
   layout.grid.forEach(savedCell => {
@@ -167,6 +180,7 @@ function loadLayoutById(id) {
     }
   });
 
+  // Update the UI
   updateStudentPool();
   setCurrentLayoutId(id);
   refreshLayoutSelect(id);
