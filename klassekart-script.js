@@ -113,6 +113,23 @@ function loadLayoutById(id) {
   const layout = layouts[id];
   if (!layout) return;
 
+  // CLEAR ALL EXISTING STATE FIRST
+  // Clear all grid cells
+  for (let cell of gridCells) {
+    cell.student = null;
+  }
+  
+  // Clear the pool completely
+  poolStudents = [];
+  
+  // Clear links
+  links.clear();
+  
+  // Reset dragging state
+  dragging = null;
+  linkStart = null;
+
+  // NOW APPLY THE SAVED LAYOUT
   // Settings first
   rows        = layout.settings.rows;
   rowSpacing  = layout.settings.rowSpacing;
@@ -124,20 +141,29 @@ function loadLayoutById(id) {
   document.getElementById('rowSpacing').value = rowSpacing;
   document.getElementById('deskSpacing').value = deskSpacing;
 
-  // Other state
+  // Apply group name
   groupName = layout.groupName || layout.name;
   document.getElementById('groupName').textContent = groupName;
+  
+  // Apply links
   links = new Set(layout.links || []);
+  
+  // Set pool students (start with all students in pool)
   poolStudents = [...layout.poolStudents];
 
   // Rebuild grid with new settings, then apply placements
   updateRowConfigs(true); // rebuild without autosave
+  
+  // Apply student placements to grid
   layout.grid.forEach(savedCell => {
     const cell = gridCells.find(c => c.row === savedCell.row && c.col === savedCell.col);
-    if (cell) {
+    if (cell && savedCell.student) {
       cell.student = savedCell.student;
+      // Remove this student from pool since they're now placed
       const idx = poolStudents.indexOf(savedCell.student);
-      if (idx !== -1) poolStudents.splice(idx, 1);
+      if (idx !== -1) {
+        poolStudents.splice(idx, 1);
+      }
     }
   });
 
