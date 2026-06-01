@@ -201,6 +201,26 @@ input[type=text] {
     background-position: 6px 4px, 50px 4px, 6px 28px;
 }
 
+.setup-presets {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 22px;
+    padding: 14px 16px;
+    background: var(--primary-soft);
+    border-radius: 12px;
+}
+.setup-presets select {
+    padding: 11px 13px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    font-size: 0.98rem;
+    font-family: var(--font);
+    background: #fff;
+    cursor: pointer;
+}
+.setup-presets select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,70,229,0.18); }
+
 .setup-actions { margin-top: 28px; text-align: center; }
 .setup-footer { margin-top: 18px; color: var(--ink-soft); font-size: 0.8rem; }
 

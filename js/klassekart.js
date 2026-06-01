@@ -608,6 +608,44 @@ function showApp() {
 }
 function showSetup() { $('app').classList.add('hidden'); $('setup').classList.remove('hidden'); }
 
+/* ----------------------------------------------- preset classes (Klasser/)  */
+let presetClasses = [];               // [{ name, file }]
+const KLASSER_DIR = 'Klasser';
+
+async function loadPresetManifest() {
+    try {
+        const res = await fetch(KLASSER_DIR + '/index.json', { cache: 'no-store' });
+        if (!res.ok) return [];
+        const data = await res.json();
+        if (!Array.isArray(data)) return [];
+        return data.map(e => typeof e === 'string'
+            ? { name: e.replace(/\.[^.]+$/, ''), file: e }
+            : { name: e.name || (e.file || '').replace(/\.[^.]+$/, ''), file: e.file })
+            .filter(e => e.file);
+    } catch (e) { return []; }
+}
+function populatePresetSelect() {
+    const sel = $('presetClassSelect');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Velg en ferdig klasse…</option>';
+    presetClasses.forEach((p, i) => { const o = document.createElement('option'); o.value = String(i); o.textContent = p.name; sel.appendChild(o); });
+    $('setupPresets').classList.toggle('hidden', presetClasses.length === 0);
+}
+async function onPresetSelected(idx) {
+    const p = presetClasses[idx];
+    if (!p) return;
+    try {
+        const res = await fetch(KLASSER_DIR + '/' + encodeURIComponent(p.file), { cache: 'no-store' });
+        if (!res.ok) throw new Error('http ' + res.status);
+        const names = parseNames(await res.text());
+        if (!names.length) { toast('Klassefilen er tom', 'err'); return; }
+        $('setupNames').value = names.join('\n');
+        $('setupNames').dispatchEvent(new Event('input'));
+        if (!$('setupClassName').value.trim()) $('setupClassName').value = p.name;
+        toast(`Hentet ${names.length} elever fra ${p.name}`, 'ok');
+    } catch (e) { toast('Kunne ikke hente klassen', 'err'); }
+}
+
 /* --------------------------------------------------------------- setup flow */
 function parseNames(text) { return text.split(/\r?\n/).map(s => s.trim()).filter(Boolean); }
 
@@ -784,6 +822,7 @@ function resetSetupForm() {
     $('setupNames').value = '';
     $('setupClassName').value = '';
     $('setupCount').textContent = '0';
+    if ($('presetClassSelect')) $('presetClassSelect').value = '';
 }
 function renameClass() {
     const name = prompt('Klassenavn:', state.name);
@@ -1010,6 +1049,7 @@ function wireSetup() {
     const names = $('setupNames');
     const updateCount = () => { $('setupCount').textContent = parseNames(names.value).length; };
     names.addEventListener('input', updateCount); updateCount();
+    $('presetClassSelect').addEventListener('change', e => { if (e.target.value !== '') onPresetSelected(parseInt(e.target.value, 10)); });
     $('setupGoBtn').addEventListener('click', () => {
         const list = parseNames(names.value);
         if (!list.length) { toast('Lim inn minst ett elevnavn', 'err'); names.focus(); return; }
@@ -1128,6 +1168,7 @@ function wireGlobal() {
 /* ------------------------------------------------------------------ init    */
 function init() {
     wireSetup(); wireApp(); wireGlobal();
+    loadPresetManifest().then(list => { presetClasses = list; populatePresetSelect(); });
     if (loadStore()) { state = store.classes[store.activeClassId]; showApp(); render(); }
     else { showSetup(); }
 }
