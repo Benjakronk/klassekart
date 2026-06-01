@@ -1,0 +1,194 @@
+<!-- Klassekartografen. Copyright Benjamin Ensrud, 2025. Version 1.1 -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Benjamins Klassekartograf</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="stylesheet" href="klassekart.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+    <div class="app-header">
+        <h1 class="app-title">Benjamins Klassekartograf</h1>
+    </div>
+
+    <div class="modal-overlay" id="classNameModal">
+        <div class="modal-container" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Endre klassenavn</h2>
+                <button class="modal-close" onclick="toggleClassNameModal(false)">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label for="classNameInput" style="display: block; margin-bottom: 8px;">Klassenavn:</label>
+                <input type="text" id="classNameInput" style="width: 100%; padding: 8px; margin-bottom: 15px; border-radius: 6px; border: 1px solid var(--border-color);" placeholder="Skriv inn klassenavn...">
+            </div>
+            <div class="modal-footer">
+                <button onclick="toggleClassNameModal(false)">Avbryt</button>
+                <button onclick="saveClassName()" style="background-color: var(--secondary);">Lagre</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="modal-overlay" id="addStudentsModal">
+        <div class="modal-container" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Legg til elever</h2>
+                <button class="modal-close" onclick="toggleAddStudentsModal(false)">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label for="studentsInput" style="display: block; margin-bottom: 8px;">Elevnavn (en per linje):</label>
+                <textarea id="studentsInput" rows="10" style="width: 100%; padding: 8px; margin-bottom: 15px; border-radius: 6px; border: 1px solid var(--border-color);" placeholder="Skriv inn elevnavn (en per linje)..."></textarea>
+            </div>
+            <div class="modal-footer">
+                <button onclick="toggleAddStudentsModal(false)">Avbryt</button>
+                <button onclick="addStudentsToPool()" style="background-color: var(--secondary);">Legg til</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="app-container">
+        <!-- Fully scrollable sidebar -->
+        <div class="sidebar">
+            <div class="panel">
+                <h2 class="panel-title">
+                    <span class="icon">📋</span>Handlinger
+                </h2>
+                <div class="button-group">
+                    <label class="file-upload tooltip">
+                        <span class="btn-icon">📂</span>Last inn elever
+                        <input type="file" id="fileInput" accept=".txt">
+                        <span class="tooltip-text">Last opp en .txt-fil med elevnavn på separate linjer</span>
+                    </label>
+                    <button onclick="exportPDF()" class="tooltip">
+                        <span class="btn-icon">📄</span>Last ned klassekart
+                        <span class="tooltip-text">Lagre nåværende klassekart som PDF</span>
+                    </button>
+                    <button onclick="toggleClassNameModal(true)" class="tooltip">
+                        <span class="btn-icon">✏️</span>Endre klassenavn
+                        <span class="tooltip-text">Endre navn på klassen</span>
+                    </button>
+                    <button onclick="resetWalkthrough()" class="tooltip">
+                        <span class="btn-icon">❓</span>Vis veiledning
+                        <span class="tooltip-text">Vis veiledningen igjen</span>
+                    </button>
+                </div>
+                <div class="button-group">
+                    <button onclick="resetGrid()" class="tooltip">
+                        <span class="btn-icon">🔄</span>Tilbakestill klassekart
+                        <span class="tooltip-text">Fjern alle plasseringer</span>
+                    </button>
+                    <button onclick="randomizePlacements()" class="tooltip">
+                        <span class="btn-icon">🎲</span>Tilfeldig plassering
+                        <span class="tooltip-text">Plasser elever tilfeldig (R)</span>
+                    </button>
+                    <button onclick="toggleLinkMode()" id="linkModeBtn" class="tooltip">
+                        <span class="btn-icon">🔗</span>Lenkemodus: AV
+                        <span class="tooltip-text">Koble sammen/frakoble pulter (L)</span>
+                    </button>
+                </div>
+                <div class="button-group">
+                    <button onclick="saveProgress()" class="tooltip">
+                        <span class="btn-icon">💾</span>Lagre fremgang
+                        <span class="tooltip-text">Lagre nåværende arrangement</span>
+                    </button>
+                    <button onclick="loadProgress()" class="tooltip">
+                        <span class="btn-icon">📁</span>Last inn fremgang
+                        <span class="tooltip-text">Last inn lagret arrangement</span>
+                    </button>
+                    <button onclick="clearSavedProgress()" class="tooltip">
+                        <span class="btn-icon">🗑️</span>Slett lagret data
+                        <span class="tooltip-text">Slett all lagret data</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2 class="panel-title"><span class="icon">🗂️</span>Oppsett</h2>
+                <div class="button-group">
+                    <select id="layoutSelect" style="width:180px; padding:8px; border-radius:6px; border:1px solid var(--border-color)">
+                    <option value="">Velg oppsett</option>
+                    </select>
+                </div>
+                <div class="button-group">
+                    <button id="saveAsLayoutBtn" class="tooltip">
+                        <span class="btn-icon">💾</span>Lagre som
+                        <span class="tooltip-text">Lagre oppsett som nytt</span>
+                    </button>
+                    <button id="saveLayoutBtn" class="tooltip">
+                        <span class="btn-icon">📝</span>Oppdater
+                        <span class="tooltip-text">Oppdater gjeldende oppsett</span>
+                    </button>
+                    <button id="deleteLayoutBtn" class="tooltip">
+                        <span class="btn-icon">🗑️</span>Slett
+                        <span class="tooltip-text">Slett valgt oppsett</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <h2 class="panel-title">
+                    <span class="icon">⚙️</span>Innstillinger
+                </h2>
+                <div class="settings-group">
+                    <div class="setting-item">
+                        <label class="setting-label">Antall rader</label>
+                        <input type="number" id="rows" value="4" min="1" max="10" onchange="updateRowConfigs()">
+                    </div>
+                    <div class="setting-item">
+                        <label class="setting-label">Avstand rader</label>
+                        <input type="number" id="rowSpacing" value="60" min="0" max="200" onchange="updateGrid()">
+                    </div>
+                    <div class="setting-item">
+                        <label class="setting-label">Avstand pulter</label>
+                        <input type="number" id="deskSpacing" value="30" min="0" max="100" onchange="updateGrid()">
+                    </div>
+                </div>
+                
+                <h3 class="panel-title" style="font-size: 0.95rem; margin-top: 15px; margin-bottom: 5px;">
+                    <span class="icon">🪑</span>Pulter per rad
+                </h3>
+                <div id="rowConfigs"></div>
+                
+                <div class="keyboard-shortcuts">
+                    <h3 style="margin-bottom: 8px; font-size: 0.9rem; opacity: 0.7;">Hurtigtaster</h3>
+                    <div class="shortcut">
+                        <span>Lenkemodus</span>
+                        <span class="shortcut-key">L</span>
+                    </div>
+                    <div class="shortcut">
+                        <span>Tilfeldig plassering</span>
+                        <span class="shortcut-key">R</span>
+                    </div>
+                    <div class="shortcut">
+                        <span>Avbryt flytting</span>
+                        <span class="shortcut-key">Esc</span>
+                    </div>
+                    <div class="shortcut">
+                        <span>Lagre fremgang</span>
+                        <span class="shortcut-key">Ctrl+S</span>
+                    </div>
+                </div>
+
+                <div class="credits">
+                    <h3 style="margin-bottom: 8px; font-size: 0.9rem; opacity: 0.7;">Credits</h3>
+                    <div class="shortcut">
+                        <a href="https://www.flaticon.com/free-icons/desk" title="desk icons">Desk icons created by Payungkead - Flaticon</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div id="groupName">Last inn elever for å begynne</div>
+            <div id="canvasContainer"></div>
+        </div>
+    </div>
+    
+    <div id="notification" class="notification"></div>
+    <footer>Copyright © Benjamin Ensrud, 2025</footer>
+    <script src="klassekart-script.js"></script>
+</body>
+</html>
