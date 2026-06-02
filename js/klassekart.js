@@ -16,7 +16,11 @@ const RGAP = 58;  // vertical gap between rows
 const STORAGE_KEY = 'klassekart_v3';
 const OLD_KEY = 'klassekart_v2';
 const DRAG_THRESHOLD = 6;
-const ADJ_DIST = (SEAT_W + GBET) * 1.15; // centre-distance counted as "next to each other"
+// Edge-to-edge gap limits deciding "sitting next to each other". tight = within a
+// group (≈GIN); loose = one normal desk/row gap (≈GBET/RGAP). Midpoints separate
+// the two cleanly (a pair-gap of 10 vs an aisle of 46; a pod-stack 10 vs a row 58).
+const ADJ_TIGHT_H = (GIN + GBET) / 2, ADJ_LOOSE_H = GBET + GIN;
+const ADJ_TIGHT_V = (GIN + RGAP) / 2, ADJ_LOOSE_V = RGAP + GIN;
 const GRID_X = SEAT_W + GBET, GRID_Y = SEAT_H + RGAP; // snap step for manual desk editing
 const PAIR_DX = SEAT_W + GIN;   // tight horizontal "pair" spacing (desks close together)
 const SEP_DX = SEAT_W + GBET;   // separated horizontal spacing (normal gap between desks/pairs)
@@ -96,6 +100,19 @@ function updateUndoButtons() {
 }
 
 function normStrength(v) { return v === 'must' || v === 'should' ? v : null; }
+/* A rule is { type:'apart'|'together', a, members:[...], strength }. apart = a
+ * away from EVERY member; together = a next to AT LEAST ONE member. Migrates the
+ * old pairwise { a, b } and the interim 'together-any' type into this shape. */
+function normRule(r) {
+    const members = (r.members && r.members.length) ? r.members.slice() : (r.b != null ? [r.b] : []);
+    return {
+        id: r.id || uid(),
+        type: r.type === 'apart' ? 'apart' : 'together',
+        a: r.a,
+        members: members.filter(id => id !== r.a),
+        strength: normStrength(r.strength) || 'must'
+    };
+}
 function normStudent(s) {
     // front/back are null | 'should' | 'must'; migrate the old boolean needsFront → soft front
     const front = normStrength(s.front) || (s.needsFront ? 'should' : null);
@@ -113,7 +130,7 @@ function normClass(c) {
         seats: c.seats || [],
         assign: c.assign || {},
         locked: c.locked || [],
-        rules: c.rules || [],
+        rules: (c.rules || []).map(normRule),
         prefs: Object.assign({ balanceGender: false, avoidRepeat: false }, c.prefs || {}),
         history: c.history || []
     };
@@ -340,22 +357,50 @@ function pruneInvalid() {
     const ids = new Set(state.students.map(s => s.id));
     for (const seatId in state.assign) if (!ids.has(state.assign[seatId])) delete state.assign[seatId];
     state.locked = state.locked.filter(id => ids.has(id));
-    state.rules = state.rules.filter(r => ids.has(r.a) && (r.b == null || ids.has(r.b)));
+    state.rules = state.rules.filter(r => {
+        if (!ids.has(r.a)) return false;
+        r.members = (r.members || []).filter(id => ids.has(id) && id !== r.a);
+        return r.members.length > 0;
+    });
 }
 
 /* ----------------------------------------------------------- adjacency      */
-function computeAdjacency(seats) {
+/* "Next to each other" is derived from the geometry, so it follows whatever the
+ * desks actually look like after manual edits — no reliance on the preset.
+ *   Pass 1 – tight clusters: orthogonal desks with a small (within-group) edge
+ *            gap. These are pairs/pods or any hand-made cluster; a desk in a
+ *            cluster is "grouped" and counts adjacent only to its cluster-mates.
+ *   Pass 2 – loose neighbours: a normal one-desk gap links same-row desks (and,
+ *            in a U layout, same-column desks too) — but only for desks that
+ *            aren't already locked into a cluster, so an aisle between two pairs
+ *            never joins them.
+ * Result: pairs→pair-mates, pods→orthogonal pod-mates, rows→same-row neighbours,
+ * front/back rows and across-the-aisle excluded, and custom clusters respected. */
+function computeAdjacency(seats, room) {
+    const useU = (room == null ? state.room : room) === 'u';
+    const n = seats.length;
     const adj = {}; const edges = [];
     seats.forEach(s => { adj[s.id] = []; });
-    for (let i = 0; i < seats.length; i++) {
-        for (let j = i + 1; j < seats.length; j++) {
-            const a = seats[i], b = seats[j];
-            const dx = (a.x - b.x), dy = (a.y - b.y);
-            if (Math.hypot(dx, dy) <= ADJ_DIST) {
-                adj[a.id].push(b.id); adj[b.id].push(a.id);
-                edges.push([a.id, b.id]);
-            }
-        }
+    const addEdge = (a, b) => { adj[a].push(b); adj[b].push(a); edges.push([a, b]); };
+    // pass 1: tight clusters
+    const clustered = new Set();
+    const tightPairs = [];
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        const a = seats[i], b = seats[j];
+        const dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
+        const horiz = dy <= SEAT_H * 0.5 && dx > SEAT_W * 0.5 && dx - SEAT_W <= ADJ_TIGHT_H;
+        const vert  = dx <= SEAT_W * 0.5 && dy > SEAT_H * 0.5 && dy - SEAT_H <= ADJ_TIGHT_V;
+        if (horiz || vert) { tightPairs.push([a.id, b.id]); clustered.add(a.id); clustered.add(b.id); }
+    }
+    tightPairs.forEach(([a, b]) => addEdge(a, b));
+    // pass 2: loose neighbours between desks not both locked into a cluster
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        const a = seats[i], b = seats[j];
+        if (clustered.has(a.id) && clustered.has(b.id)) continue;
+        const dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
+        const horiz = dy <= SEAT_H * 0.5 && dx > SEAT_W * 0.5 && dx - SEAT_W <= ADJ_LOOSE_H;
+        const vert  = useU && dx <= SEAT_W * 0.5 && dy > SEAT_H * 0.5 && dy - SEAT_H <= ADJ_LOOSE_V;
+        if (horiz || vert) addEdge(a.id, b.id);
     }
     return { adj, edges };
 }
@@ -367,14 +412,21 @@ function buildContext() {
     const minY = ys.length ? Math.min(...ys) : 0;
     const maxY = ys.length ? Math.max(...ys) : 0;
     const seatById = {}; state.seats.forEach(s => seatById[s.id] = s);
-    // apart: pairKey -> strongest strength ('must' wins). together: {a,b,strength}
+    // apart: pairKey -> strongest strength ('must' wins) for every (a, member) pair.
+    // together: {a, members:Set, strength} — a next to AT LEAST ONE of members.
     const apart = new Map(), together = [];
     state.rules.forEach(r => {
         const st = normStrength(r.strength) || 'must'; // old rules had no strength = hard
+        const members = (r.members || []).filter(id => id !== r.a);
+        if (!members.length) return;
         if (r.type === 'apart') {
-            const k = pairKey(r.a, r.b);
-            apart.set(k, apart.get(k) === 'must' || st === 'must' ? 'must' : 'should');
-        } else if (r.type === 'together') together.push({ a: r.a, b: r.b, strength: st });
+            members.forEach(m => {
+                const k = pairKey(r.a, m);
+                apart.set(k, apart.get(k) === 'must' || st === 'must' ? 'must' : 'should');
+            });
+        } else { // together
+            together.push({ a: r.a, members: new Set(members), strength: st });
+        }
     });
     const genderOf = {}; const placeWants = []; // {id, side:'front'|'back', strength}
     state.students.forEach(s => {
@@ -386,7 +438,7 @@ function buildContext() {
     if (state.prefs.avoidRepeat && state.history.length) {
         const snap = state.history[0];
         const seatsP = snap.seats || state.seats;
-        const { edges: pe } = computeAdjacency(seatsP);
+        const { edges: pe } = computeAdjacency(seatsP, snap.room);
         pe.forEach(([s1, s2]) => {
             const a = snap.assign[s1], b = snap.assign[s2];
             if (a && b) prevPairs.add(pairKey(a, b));
@@ -409,10 +461,10 @@ function scoreAssign(assign, ctx) {
         if (ctx.prefs.balanceGender && ctx.genderOf[a] && ctx.genderOf[b] && ctx.genderOf[a] === ctx.genderOf[b]) score += 4;
         if (ctx.prefs.avoidRepeat && ctx.prevPairs.has(k)) score += 10;
     }
-    // together pairs
+    // together: satisfied if a neighbours at least one member of the set
     for (const t of ctx.together) {
-        const sa = seatOf[t.a], sb = seatOf[t.b];
-        const ok = sa && sb && ctx.adj[sa].indexOf(sb) !== -1;
+        const sa = seatOf[t.a];
+        const ok = sa && ctx.adj[sa].some(nb => t.members.has(assign[nb]));
         if (!ok) score += t.strength === 'must' ? 200 : 30;
     }
     // near-front / near-back wishes (distance from the wished edge, weighted by strength)
@@ -424,6 +476,15 @@ function scoreAssign(assign, ctx) {
         score += dist * (w.strength === 'must' ? 1.0 : 0.25);
     }
     return score;
+}
+
+/* Swap the occupants of seats p and q (an empty seat == an absent key).
+ * Each seat's value comes from the OTHER seat, so a swap can never drop a
+ * student — the guard tests the value being moved IN, not the old one. */
+function swapSeats(assign, p, q) {
+    const av = assign[p], bv = assign[q];
+    if (av === undefined) delete assign[q]; else assign[q] = av;
+    if (bv === undefined) delete assign[p]; else assign[p] = bv;
 }
 
 function smartArrange(silent) {
@@ -451,22 +512,27 @@ function smartArrange(silent) {
             const p = freeSeatIds[Math.floor(Math.random() * freeSeatIds.length)];
             const q = freeSeatIds[Math.floor(Math.random() * freeSeatIds.length)];
             if (p === q) continue;
-            const av = assign[p], bv = assign[q];
-            if (av === undefined && bv === undefined) continue;
-            if (av === undefined) delete assign[p]; else assign[p] = bv;
-            if (bv === undefined) delete assign[q]; else assign[q] = av;
+            if (assign[p] === undefined && assign[q] === undefined) continue;
+            swapSeats(assign, p, q);
             const sc = scoreAssign(assign, ctx);
             if (sc <= curScore || Math.random() < Math.exp((curScore - sc) / T)) {
                 curScore = sc;
-            } else { // revert
-                if (av === undefined) delete assign[p]; else assign[p] = av;
-                if (bv === undefined) delete assign[q]; else assign[q] = bv;
+            } else { // revert — swapping back restores the original placement
+                swapSeats(assign, p, q);
             }
             T *= 0.997;
         }
         if (curScore < bestScore) { bestScore = curScore; best = Object.assign({}, assign); }
     }
     state.assign = best;
+    // invariant: annealing must place as many students as a plain fill would.
+    // If a future swap regression drops students, fail loud and degrade to shuffle.
+    const placed = new Set(Object.values(state.assign).filter(v => v !== undefined));
+    const expected = Math.min(state.students.length, state.seats.length);
+    if (placed.size !== expected) {
+        console.error(`smartArrange dropped students: placed ${placed.size}/${expected}`);
+        fillSeats(state.students.map(s => s.id));
+    }
     save(); render();
     if (!silent) explainResult(ctx);
 }
@@ -489,12 +555,12 @@ function explainResult(ctx) {
     if (ctx.together.length) {
         let ok = 0, mustViol = 0;
         ctx.together.forEach(t => {
-            const sa = seatOf[t.a], sb = seatOf[t.b];
-            const good = sa && sb && ctx.adj[sa].indexOf(sb) !== -1;
+            const sa = seatOf[t.a];
+            const good = sa && ctx.adj[sa].some(nb => t.members.has(assign[nb]));
             if (good) ok++; else if (t.strength === 'must') mustViol++;
         });
         problems += mustViol;
-        lines.push(rowLine(mustViol === 0, `${ok}/${ctx.together.length} «sitte sammen» oppfylt`));
+        lines.push(rowLine(mustViol === 0, `${ok}/${ctx.together.length} «ved siden av» oppfylt`));
     }
     if (ctx.placeWants.length) {
         const band = (SEAT_H + RGAP) * 1.2;
@@ -961,17 +1027,65 @@ function closeModal(id) { $(id).classList.remove('show'); }
 function closeAllDropdowns() { document.querySelectorAll('.dropdown.open').forEach(d => d.classList.remove('open')); }
 
 /* -- rules modal -- */
+let editingRuleId = null;
 function openRulesModal() {
     $('prefBalanceGender').checked = !!state.prefs.balanceGender;
     $('prefAvoidRepeat').checked = !!state.prefs.avoidRepeat;
     fillStudentSelect($('ruleA'));
-    fillStudentSelect($('ruleB'));
+    fillMemberPicker();
+    setRuleEditMode(null);
     renderRulesList();
     openModal('rulesModal');
+}
+/* Load a rule into the add-form for editing (rule = null clears the form). */
+function setRuleEditMode(rule) {
+    const boxes = $('ruleMembers').querySelectorAll('input');
+    if (rule) {
+        editingRuleId = rule.id;
+        $('ruleStrength').value = rule.strength;
+        $('ruleType').value = rule.type;
+        $('ruleA').value = rule.a;
+        const members = new Set(rule.members || []);
+        boxes.forEach(cb => cb.checked = members.has(cb.value));
+        $('ruleAddBtn').textContent = 'Oppdater regel';
+        $('ruleCancelBtn').classList.remove('hidden');
+    } else {
+        editingRuleId = null;
+        boxes.forEach(cb => cb.checked = false);
+        $('ruleAddBtn').textContent = 'Legg til';
+        $('ruleCancelBtn').classList.add('hidden');
+    }
+    updateRuleTypeUI();
+}
+function startEditRule(id) {
+    const rule = state.rules.find(r => r.id === id);
+    if (!rule) return;
+    setRuleEditMode(rule);
+    renderRulesList();
+    $('ruleMembers').scrollIntoView({ block: 'nearest' });
 }
 function fillStudentSelect(sel) {
     sel.innerHTML = '';
     state.students.forEach(s => { const o = document.createElement('option'); o.value = s.id; o.textContent = s.name; sel.appendChild(o); });
+}
+function fillMemberPicker() {
+    const box = $('ruleMembers');
+    box.innerHTML = '';
+    state.students.forEach(s => {
+        const lbl = document.createElement('label');
+        lbl.className = 'member-chip';
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = s.id;
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(' ' + s.name));
+        box.appendChild(lbl);
+    });
+}
+/* the hint adapts to the rule type — apart = away from all, together = next to one */
+function updateRuleTypeUI() {
+    const apart = $('ruleType').value === 'apart';
+    $('ruleAnyHint').innerHTML = apart
+        ? 'Velg en elev og kryss av hvem den skal sitte <strong>unna</strong> (alle avkryssede).'
+        : 'Velg en elev og kryss av mulige naboer. Flere avkryssede = ved siden av <strong>én av</strong> dem.';
 }
 function renderRulesList() {
     const list = $('rulesList');
@@ -981,19 +1095,33 @@ function renderRulesList() {
     const ordered = state.rules.map((r, i) => ({ r, i }))
         .sort((x, y) => (((normStrength(y.r.strength) || 'must') === 'must') - ((normStrength(x.r.strength) || 'must') === 'must')));
     ordered.forEach(({ r, i }) => {
-        const a = studentById(r.a), b = studentById(r.b);
-        if (!a || !b) return;
+        const a = studentById(r.a);
+        if (!a) return;
+        const names = (r.members || []).map(id => studentById(id)).filter(Boolean).map(s => `<strong>${escapeHtml(s.name)}</strong>`);
+        if (!names.length) return;
         const st = normStrength(r.strength) || 'must';
-        const row = document.createElement('div');
-        row.className = 'rule-row';
-        const icon = r.type === 'apart' ? '🚫' : '🤝';
-        const word = r.type === 'apart' ? 'fra hverandre' : 'sammen';
         const chip = `<span class="rule-chip ${st}">${st === 'must' ? 'Må' : 'Bør'}</span>`;
-        row.innerHTML = `<span class="rule-text">${chip} ${icon} <strong>${escapeHtml(a.name)}</strong> &amp; <strong>${escapeHtml(b.name)}</strong> – ${word}</span>`;
+        const icon = r.type === 'apart' ? '🚫' : '🤝';
+        // together with several members = "next to one of"; apart = away from all
+        const phrase = r.type === 'apart' ? 'ikke ved siden av'
+            : (names.length > 1 ? 'ved siden av én av' : 'ved siden av');
+        const text = `${chip} ${icon} <strong>${escapeHtml(a.name)}</strong> – ${phrase}: ${names.join(', ')}`;
+        const row = document.createElement('div');
+        row.className = 'rule-row' + (r.id === editingRuleId ? ' editing' : '');
+        row.innerHTML = `<span class="rule-text">${text}</span>`;
+        const actions = document.createElement('div');
+        actions.className = 'rule-actions';
+        const edit = document.createElement('button');
+        edit.className = 'rule-edit'; edit.textContent = '✎'; edit.title = 'Rediger regel';
+        edit.addEventListener('click', () => startEditRule(r.id));
         const del = document.createElement('button');
-        del.className = 'rule-del'; del.textContent = '✕';
-        del.addEventListener('click', () => { state.rules.splice(i, 1); save(); renderRulesList(); });
-        row.appendChild(del);
+        del.className = 'rule-del'; del.textContent = '✕'; del.title = 'Slett regel';
+        del.addEventListener('click', () => {
+            if (r.id === editingRuleId) setRuleEditMode(null);
+            state.rules.splice(i, 1); save(); renderRulesList();
+        });
+        actions.appendChild(edit); actions.appendChild(del);
+        row.appendChild(actions);
         list.appendChild(row);
     });
 }
@@ -1487,13 +1615,26 @@ function wireApp() {
     $('selPoolBtn').addEventListener('click', () => { if (selected) { unseat(selected); setSelected(null); } });
 
     // rules modal
+    $('ruleType').addEventListener('change', updateRuleTypeUI);
+    $('ruleCancelBtn').addEventListener('click', () => { setRuleEditMode(null); renderRulesList(); });
     $('ruleAddBtn').addEventListener('click', () => {
-        const a = $('ruleA').value, b = $('ruleB').value, type = $('ruleType').value;
+        const a = $('ruleA').value, type = $('ruleType').value;
         const strength = $('ruleStrength').value === 'should' ? 'should' : 'must';
-        if (!a || !b || a === b) { toast('Velg to forskjellige elever', 'err'); return; }
-        const existing = state.rules.find(r => r.type === type && pairKey(r.a, r.b) === pairKey(a, b));
-        if (existing) { existing.strength = strength; toast('Regel oppdatert', 'ok'); }
-        else state.rules.push({ id: uid(), type, a, b, strength });
+        if (!a) { toast('Velg en elev', 'err'); return; }
+        const members = [...$('ruleMembers').querySelectorAll('input:checked')].map(c => c.value).filter(id => id !== a);
+        if (!members.length) { toast('Kryss av minst én elev', 'err'); return; }
+        if (editingRuleId) { // editing: overwrite the rule in place
+            const r = state.rules.find(x => x.id === editingRuleId);
+            if (r) { r.type = type; r.a = a; r.members = members; r.strength = strength; toast('Regel oppdatert', 'ok'); }
+        } else {
+            // same student + type + strength → merge into one rule; else add a new one
+            const existing = state.rules.find(r => r.type === type && r.a === a && (normStrength(r.strength) || 'must') === strength);
+            if (existing) {
+                existing.members = [...new Set([...(existing.members || []), ...members])];
+                toast('Regel oppdatert', 'ok');
+            } else state.rules.push({ id: uid(), type, a, members, strength });
+        }
+        setRuleEditMode(null);
         save(); renderRulesList();
     });
     $('prefBalanceGender').addEventListener('change', e => { state.prefs.balanceGender = e.target.checked; save(); });

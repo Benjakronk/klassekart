@@ -715,17 +715,36 @@ body.present .zoom-ctrl { display: none; }
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     padding: 9px 12px; background: #f7f8fc; border: 1px solid var(--line); border-radius: 9px; font-size: 0.92rem;
 }
-.rule-del {
-    border: none; background: none; color: var(--danger); font-size: 1rem; cursor: pointer;
-    padding: 2px 6px; border-radius: 6px; flex-shrink: 0;
+.rule-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.rule-del, .rule-edit {
+    border: none; background: none; font-size: 1rem; cursor: pointer;
+    padding: 2px 6px; border-radius: 6px;
 }
+.rule-del { color: var(--danger); }
 .rule-del:hover { background: #fde7ec; }
+.rule-edit { color: var(--primary); }
+.rule-edit:hover { background: var(--primary-soft); }
+.rule-row.editing { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
 .rule-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .rule-add select {
-    flex: 1; min-width: 110px; padding: 9px 10px; border: 1px solid var(--line);
+    flex: 1 1 170px; min-width: 170px; padding: 9px 10px; border: 1px solid var(--line);
     border-radius: 8px; font-size: 0.9rem; font-family: var(--font); background: #fff;
 }
-.rule-add #ruleStrength { flex: 0 0 auto; min-width: 64px; }
+.rule-add #ruleStrength { flex: 0 0 auto; min-width: 74px; }
+.rule-add #ruleType { flex: 0 0 auto; min-width: 156px; }
+.rule-add #ruleA { flex: 2 1 190px; min-width: 190px; }
+.rule-members {
+    flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px;
+    max-height: 168px; overflow-y: auto; padding: 8px;
+    border: 1px solid var(--line); border-radius: 8px; background: #f4f4f7;
+}
+.member-chip {
+    display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+    font-size: 0.85rem; padding: 4px 9px; border: 1px solid var(--line);
+    border-radius: 16px; background: #fff; user-select: none;
+}
+.member-chip input { margin: 0; }
+.member-chip:has(input:checked) { background: var(--primary); color: #fff; border-color: transparent; }
 .rule-text { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .rule-chip {
     flex-shrink: 0; font-size: 0.72rem; font-weight: 700; letter-spacing: .02em;
@@ -780,5 +799,6 @@ body.present .zoom-ctrl { display: none; }
     .class-title { max-width: 28vw; }
     .topbar { gap: 6px; padding: 8px 10px; }
     #smartBtn .btn-txt { display: none; }
-    .rule-add select { min-width: 90px; }
+    .rule-add select,
+    .rule-add #ruleA { min-width: 120px; }
 }
