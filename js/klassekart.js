@@ -17,6 +17,12 @@ const STORAGE_KEY = 'klassekart_v3';
 const OLD_KEY = 'klassekart_v2';
 const DRAG_THRESHOLD = 6;
 const ADJ_DIST = (SEAT_W + GBET) * 1.15; // centre-distance counted as "next to each other"
+const GRID_X = SEAT_W + GBET, GRID_Y = SEAT_H + RGAP; // snap step for manual desk editing
+const PAIR_DX = SEAT_W + GIN;   // tight horizontal "pair" spacing (desks close together)
+const SEP_DX = SEAT_W + GBET;   // separated horizontal spacing (normal gap between desks/pairs)
+const PAIR_DY = SEAT_H + GIN;   // tight vertical pairing (stacked desks, e.g. 2×2 pods)
+const SEP_DY = SEAT_H + RGAP;   // separated vertical spacing (normal gap between rows)
+const PAIR_SNAP = 46;           // how close (board px) before snapping to a neighbour offset
 
 /* ------------------------------------------------------------------- state  */
 let store = null;          // { activeClassId, classes: { id: classObj } }
@@ -26,6 +32,10 @@ let selected = null;       // studentId selected via tap
 let drag = null;           // active pointer drag
 let suppressClick = false; // ignore the click synthesized after a real drag
 let presentMode = false;
+let editMode = false;      // manual desk-editing mode
+let deskDrag = null;       // active desk move/add in edit mode
+let boardScale = 1;        // current CSS scale of the board (set by fitBoard)
+let zoom = null;           // null = auto-fit; otherwise an explicit scale factor
 
 let _seq = 0;
 function uid() { return 's' + Date.now().toString(36) + (_seq++).toString(36); }
@@ -40,14 +50,65 @@ function save() {
     catch (e) { console.error('save failed', e); }
 }
 
+/* ----------------------------------------------------------- undo / redo    */
+/* Snapshots the desk arrangement + placement of the active class. Per-class,
+ * session-only (reset when switching class / opening a class). */
+let undoStack = [], redoStack = [];
+const UNDO_LIMIT = 60;
+function snapshot() {
+    return JSON.stringify({
+        seats: state.seats, assign: state.assign, locked: state.locked,
+        room: state.room, roomMode: state.roomMode, roomParams: state.roomParams
+    });
+}
+function pushUndo(snap) {
+    if (!state) return;
+    undoStack.push(snap || snapshot());
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    redoStack.length = 0;
+    updateUndoButtons();
+}
+function resetUndo() { undoStack = []; redoStack = []; updateUndoButtons(); }
+function restoreSnapshot(snap) {
+    const s = JSON.parse(snap);
+    state.seats = s.seats; state.assign = s.assign; state.locked = s.locked;
+    state.room = s.room; state.roomMode = s.roomMode; state.roomParams = s.roomParams;
+    pruneInvalid();
+}
+function undo() {
+    if (!undoStack.length) { toast('Ingenting å angre', 'err'); return; }
+    redoStack.push(snapshot());
+    restoreSnapshot(undoStack.pop());
+    save(); render(); updateUndoButtons();
+    toast('Angret ↩', 'ok');
+}
+function redo() {
+    if (!redoStack.length) { toast('Ingenting å gjenta', 'err'); return; }
+    undoStack.push(snapshot());
+    restoreSnapshot(redoStack.pop());
+    save(); render(); updateUndoButtons();
+    toast('Gjentok ↪', 'ok');
+}
+function updateUndoButtons() {
+    const u = $('undoBtn'), r = $('redoBtn');
+    if (u) u.disabled = !undoStack.length;
+    if (r) r.disabled = !redoStack.length;
+}
+
+function normStrength(v) { return v === 'must' || v === 'should' ? v : null; }
 function normStudent(s) {
-    return { id: s.id || uid(), name: s.name, gender: s.gender || null, needsFront: !!s.needsFront, tags: s.tags || [] };
+    // front/back are null | 'should' | 'must'; migrate the old boolean needsFront → soft front
+    const front = normStrength(s.front) || (s.needsFront ? 'should' : null);
+    const back = normStrength(s.back);
+    return { id: s.id || uid(), name: s.name, gender: s.gender || null, front, back: front ? null : back, tags: s.tags || [] };
 }
 function normClass(c) {
     return {
         id: c.id || uid(),
         name: c.name || 'Klasse',
         room: c.room || 'pairs',
+        roomMode: c.roomMode === 'custom' ? 'custom' : 'auto',
+        roomParams: Object.assign({ rows: null, perRow: null, gapX: null, gapY: null }, c.roomParams || {}),
         students: (c.students || []).map(normStudent),
         seats: c.seats || [],
         assign: c.assign || {},
@@ -69,6 +130,7 @@ function loadStore() {
                 if (!store.activeClassId || !store.classes[store.activeClassId]) {
                     store.activeClassId = Object.keys(store.classes)[0] || null;
                 }
+                store.roomTemplates = store.roomTemplates || [];
                 return !!store.activeClassId;
             }
         }
@@ -76,7 +138,7 @@ function loadStore() {
         const old = localStorage.getItem(OLD_KEY);
         if (old) {
             const c = normClass(JSON.parse(old));
-            store = { activeClassId: c.id, classes: { [c.id]: c } };
+            store = { activeClassId: c.id, classes: { [c.id]: c }, roomTemplates: [] };
             save();
             localStorage.removeItem(OLD_KEY);
             return true;
@@ -87,6 +149,9 @@ function loadStore() {
 
 function setActiveClass(id) {
     if (!store.classes[id]) return;
+    if (editMode) exitEditMode();
+    zoom = null;
+    resetUndo();
     store.activeClassId = id;
     state = store.classes[id];
     selected = null;
@@ -96,33 +161,43 @@ function setActiveClass(id) {
 }
 
 /* -------------------------------------------------------- seat generators   */
-function genRows(n) {
-    const cols = clamp(Math.round(Math.sqrt(n * 1.7)), 1, 9);
-    const pitchX = SEAT_W + GBET, pitchY = SEAT_H + RGAP;
-    const fullW = cols * SEAT_W + (cols - 1) * GBET;
+/* opts may carry explicit overrides from a custom arrangement:
+ *   cols / perRow  – force the grid width (desks-per-row or groups-per-row)
+ *   gapX / gapY    – desk and row spacing (fall back to GBET / RGAP)         */
+function genRows(n, opts) {
+    opts = opts || {};
+    const cols = opts.cols ? clamp(opts.cols, 1, 20) : clamp(Math.round(Math.sqrt(n * 1.7)), 1, 9);
+    const gapX = opts.gapX != null ? opts.gapX : GBET;
+    const gapY = opts.gapY != null ? opts.gapY : RGAP;
+    const pitchX = SEAT_W + gapX, pitchY = SEAT_H + gapY;
+    const fullW = cols * SEAT_W + (cols - 1) * gapX;
     const seats = [];
     const rowsN = Math.ceil(n / cols);
     for (let r = 0; r < rowsN; r++) {
         const inRow = Math.min(cols, n - r * cols);
-        const rowW = inRow * SEAT_W + (inRow - 1) * GBET;
+        const rowW = inRow * SEAT_W + (inRow - 1) * gapX;
         const x0 = (fullW - rowW) / 2;
         for (let c = 0; c < inRow; c++) seats.push({ x: x0 + c * pitchX, y: r * pitchY });
     }
     return seats;
 }
-function genGroups(n, perGroup, gridCols, gridRows) {
+function genGroups(n, perGroup, gridCols, gridRows, opts) {
+    opts = opts || {};
+    const gapX = opts.gapX != null ? opts.gapX : GBET;
+    const gapY = opts.gapY != null ? opts.gapY : RGAP;
     const groupW = gridCols * SEAT_W + (gridCols - 1) * GIN;
     const groupH = gridRows * SEAT_H + (gridRows - 1) * GIN;
     const groups = Math.ceil(n / perGroup);
-    const perRow = clamp(Math.round(Math.sqrt(groups * (gridRows > 1 ? 1 : 1.3))), 1, gridRows > 1 ? 3 : 4);
-    const pitchGroupX = groupW + GBET, pitchGroupY = groupH + RGAP;
-    const fullW = perRow * groupW + (perRow - 1) * GBET;
+    const perRow = opts.perRow ? clamp(opts.perRow, 1, 20)
+        : clamp(Math.round(Math.sqrt(groups * (gridRows > 1 ? 1 : 1.3))), 1, gridRows > 1 ? 3 : 4);
+    const pitchGroupX = groupW + gapX, pitchGroupY = groupH + gapY;
+    const fullW = perRow * groupW + (perRow - 1) * gapX;
     const seats = [];
     let placed = 0;
     const groupRows = Math.ceil(groups / perRow);
     for (let gr = 0; gr < groupRows; gr++) {
         const groupsInRow = Math.min(perRow, groups - gr * perRow);
-        const rowW = groupsInRow * groupW + (groupsInRow - 1) * GBET;
+        const rowW = groupsInRow * groupW + (groupsInRow - 1) * gapX;
         const x0 = (fullW - rowW) / 2;
         for (let gc = 0; gc < groupsInRow; gc++) {
             const gx = x0 + gc * pitchGroupX, gy = gr * pitchGroupY;
@@ -146,15 +221,24 @@ function genU(n) {
     for (let r = h - 1; r >= 0; r--) seats.push({ x: (cols - 1) * pitchX, y: r * pitchY });
     return seats;
 }
-function generateSeats(preset, n) {
+/* how many desks an explicit rows×perRow grid yields for a preset (unit size:
+ * rows = 1 desk/unit, pairs = 2, pods = 4) */
+function deskCountFor(preset, rows, perRow) {
+    const unit = preset === 'pairs' ? 2 : preset === 'pods' ? 4 : 1;
+    return clamp(rows | 0, 1, 20) * clamp(perRow | 0, 1, 20) * unit;
+}
+function generateSeats(preset, n, params) {
     n = Math.max(0, n | 0);
+    params = params || {};
+    const gaps = { gapX: params.gapX, gapY: params.gapY };
+    const cols = params.perRow || null;
     let seats;
     if (n === 0) seats = [];
-    else if (preset === 'rows') seats = genRows(n);
-    else if (preset === 'pairs') seats = genGroups(n, 2, 2, 1);
-    else if (preset === 'pods') seats = genGroups(n, 4, 2, 2);
+    else if (preset === 'rows') seats = genRows(n, Object.assign({ cols }, gaps));
+    else if (preset === 'pairs') seats = genGroups(n, 2, 2, 1, Object.assign({ perRow: cols }, gaps));
+    else if (preset === 'pods') seats = genGroups(n, 4, 2, 2, Object.assign({ perRow: cols }, gaps));
     else if (preset === 'u') seats = genU(n);
-    else seats = genGroups(n, 2, 2, 1);
+    else seats = genGroups(n, 2, 2, 1, gaps);
     if (seats.length) {
         const minX = Math.min(...seats.map(s => s.x));
         const minY = Math.min(...seats.map(s => s.y));
@@ -176,6 +260,8 @@ function placeStudent(sid, seatId) {
     const cur = seatOfStudent(sid);
     const occ = state.assign[seatId] || null;
     if (occ && isLocked(occ)) { toast('Plassen er låst', 'err'); return; }
+    if (cur === seatId) return; // no-op
+    pushUndo();
     if (cur) delete state.assign[cur];
     if (occ && cur) state.assign[cur] = occ; // swap; otherwise occupant returns to pool
     state.assign[seatId] = sid;
@@ -184,15 +270,16 @@ function placeStudent(sid, seatId) {
 function unseat(sid) {
     if (isLocked(sid)) { toast('Eleven er låst – lås opp først', 'err'); return; }
     const cur = seatOfStudent(sid);
-    if (cur) delete state.assign[cur];
+    if (!cur) return;
+    pushUndo();
+    delete state.assign[cur];
     save(); render();
 }
 function toggleLock(sid) {
     const i = state.locked.indexOf(sid);
-    if (i === -1) {
-        if (!seatOfStudent(sid)) { toast('Plasser eleven før du låser', 'err'); return; }
-        state.locked.push(sid);
-    } else state.locked.splice(i, 1);
+    if (i === -1 && !seatOfStudent(sid)) { toast('Plasser eleven før du låser', 'err'); return; }
+    pushUndo();
+    if (i === -1) state.locked.push(sid); else state.locked.splice(i, 1);
     save(); render();
 }
 
@@ -208,6 +295,7 @@ function fillSeats(orderedIds) {
 }
 
 function shuffleSeating(silent) {
+    pushUndo();
     const ids = state.students.map(s => s.id);
     for (let i = ids.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [ids[i], ids[j]] = [ids[j], ids[i]]; }
     fillSeats(ids);
@@ -219,16 +307,30 @@ function shuffleSeating(silent) {
 function regenSeatsPreserve() {
     const seated = [...state.seats].filter(s => state.assign[s.id])
         .sort((a, b) => a.y - b.y || a.x - b.x).map(s => state.assign[s.id]);
-    state.seats = generateSeats(state.room, state.students.length);
+    state.seats = generateSeats(state.room, state.students.length, state.roomParams);
     state.assign = {};
     seated.forEach((sid, i) => { if (state.seats[i]) state.assign[state.seats[i].id] = sid; });
 }
-function applyRoom(preset, keepSeats) {
+/* params: { rows, perRow, gapX, gapY } — rows+perRow present ⇒ custom (fixed
+ * desk count, decoupled from roster); otherwise auto (desk count = #students). */
+function applyRoom(preset, keepSeats, params) {
+    params = params || {};
+    pushUndo();
     let seated = [];
     if (keepSeats) seated = [...state.seats].filter(s => state.assign[s.id])
         .sort((a, b) => a.y - b.y || a.x - b.x).map(s => state.assign[s.id]);
+    const custom = !!(params.rows && params.perRow) && preset !== 'u';
     state.room = preset;
-    state.seats = generateSeats(preset, state.students.length);
+    state.roomMode = custom ? 'custom' : 'auto';
+    state.roomParams = {
+        rows: custom ? clamp(params.rows, 1, 20) : null,
+        perRow: custom ? clamp(params.perRow, 1, 20) : null,
+        gapX: params.gapX != null ? params.gapX : null,
+        gapY: params.gapY != null ? params.gapY : null
+    };
+    const n = custom ? deskCountFor(preset, state.roomParams.rows, state.roomParams.perRow)
+                     : state.students.length;
+    state.seats = generateSeats(preset, n, state.roomParams);
     state.assign = {};
     if (keepSeats) seated.forEach((sid, i) => { if (state.seats[i]) state.assign[state.seats[i].id] = sid; });
     save(); render();
@@ -261,15 +363,25 @@ function computeAdjacency(seats) {
 /* -------------------------------------------------- smart arrange (Phase 2) */
 function buildContext() {
     const { adj, edges } = computeAdjacency(state.seats);
-    const minY = state.seats.length ? Math.min(...state.seats.map(s => s.y)) : 0;
+    const ys = state.seats.map(s => s.y);
+    const minY = ys.length ? Math.min(...ys) : 0;
+    const maxY = ys.length ? Math.max(...ys) : 0;
     const seatById = {}; state.seats.forEach(s => seatById[s.id] = s);
-    const apart = new Set(), together = [];
+    // apart: pairKey -> strongest strength ('must' wins). together: {a,b,strength}
+    const apart = new Map(), together = [];
     state.rules.forEach(r => {
-        if (r.type === 'apart') apart.add(pairKey(r.a, r.b));
-        else if (r.type === 'together') together.push([r.a, r.b]);
+        const st = normStrength(r.strength) || 'must'; // old rules had no strength = hard
+        if (r.type === 'apart') {
+            const k = pairKey(r.a, r.b);
+            apart.set(k, apart.get(k) === 'must' || st === 'must' ? 'must' : 'should');
+        } else if (r.type === 'together') together.push({ a: r.a, b: r.b, strength: st });
     });
-    const genderOf = {}; const frontStudents = [];
-    state.students.forEach(s => { genderOf[s.id] = s.gender; if (s.needsFront) frontStudents.push(s.id); });
+    const genderOf = {}; const placeWants = []; // {id, side:'front'|'back', strength}
+    state.students.forEach(s => {
+        genderOf[s.id] = s.gender;
+        if (s.front) placeWants.push({ id: s.id, side: 'front', strength: s.front });
+        if (s.back) placeWants.push({ id: s.id, side: 'back', strength: s.back });
+    });
     let prevPairs = new Set();
     if (state.prefs.avoidRepeat && state.history.length) {
         const snap = state.history[0];
@@ -280,7 +392,7 @@ function buildContext() {
             if (a && b) prevPairs.add(pairKey(a, b));
         });
     }
-    return { adj, edges, minY, seatById, apart, together, genderOf, frontStudents, prevPairs, prefs: state.prefs };
+    return { adj, edges, minY, maxY, seatById, apart, together, genderOf, placeWants, prevPairs, prefs: state.prefs };
 }
 
 function scoreAssign(assign, ctx) {
@@ -292,26 +404,31 @@ function scoreAssign(assign, ctx) {
         const a = assign[s1], b = assign[s2];
         if (!a || !b) continue;
         const k = pairKey(a, b);
-        if (ctx.apart.has(k)) score += 1000;
+        const apartSt = ctx.apart.get(k);
+        if (apartSt) score += apartSt === 'must' ? 1000 : 30;
         if (ctx.prefs.balanceGender && ctx.genderOf[a] && ctx.genderOf[b] && ctx.genderOf[a] === ctx.genderOf[b]) score += 4;
         if (ctx.prefs.avoidRepeat && ctx.prevPairs.has(k)) score += 10;
     }
     // together pairs
-    for (const [a, b] of ctx.together) {
-        const sa = seatOf[a], sb = seatOf[b];
-        if (!sa || !sb || ctx.adj[sa].indexOf(sb) === -1) score += 200;
+    for (const t of ctx.together) {
+        const sa = seatOf[t.a], sb = seatOf[t.b];
+        const ok = sa && sb && ctx.adj[sa].indexOf(sb) !== -1;
+        if (!ok) score += t.strength === 'must' ? 200 : 30;
     }
-    // needs-front
-    for (const id of ctx.frontStudents) {
-        const se = seatOf[id];
-        if (!se) { score += 80; continue; }
-        score += (ctx.seatById[se].y - ctx.minY) * 0.25;
+    // near-front / near-back wishes (distance from the wished edge, weighted by strength)
+    for (const w of ctx.placeWants) {
+        const se = seatOf[w.id];
+        if (!se) { score += w.strength === 'must' ? 200 : 60; continue; }
+        const y = ctx.seatById[se].y;
+        const dist = w.side === 'front' ? (y - ctx.minY) : (ctx.maxY - y);
+        score += dist * (w.strength === 'must' ? 1.0 : 0.25);
     }
     return score;
 }
 
 function smartArrange(silent) {
     if (!state.seats.length || !state.students.length) { toast('Ingen elever å plassere', 'err'); return; }
+    pushUndo();
     const ctx = buildContext();
     const fixed = {};
     state.locked.forEach(id => { const se = seatOfStudent(id); if (se) fixed[se] = id; });
@@ -362,22 +479,33 @@ function explainResult(ctx) {
     const lines = [];
     let problems = 0;
 
-    const apartArr = [...ctx.apart];
-    if (apartArr.length) {
-        const bad = apartArr.filter(k => adjacentNow.has(k)).length;
-        problems += bad;
-        lines.push(rowLine(bad === 0, `${apartArr.length - bad}/${apartArr.length} «hold fra hverandre» oppfylt`));
+    // "problems" counts only hard (Må) violations — those decide the headline / modal.
+    if (ctx.apart.size) {
+        let total = 0, satisfied = 0, mustViol = 0;
+        ctx.apart.forEach((st, k) => { total++; if (!adjacentNow.has(k)) satisfied++; else if (st === 'must') mustViol++; });
+        problems += mustViol;
+        lines.push(rowLine(mustViol === 0, `${satisfied}/${total} «hold fra hverandre» oppfylt`));
     }
     if (ctx.together.length) {
-        const ok = ctx.together.filter(([a, b]) => { const sa = seatOf[a], sb = seatOf[b]; return sa && sb && ctx.adj[sa].indexOf(sb) !== -1; }).length;
-        problems += ctx.together.length - ok;
-        lines.push(rowLine(ok === ctx.together.length, `${ok}/${ctx.together.length} «må sitte sammen» oppfylt`));
+        let ok = 0, mustViol = 0;
+        ctx.together.forEach(t => {
+            const sa = seatOf[t.a], sb = seatOf[t.b];
+            const good = sa && sb && ctx.adj[sa].indexOf(sb) !== -1;
+            if (good) ok++; else if (t.strength === 'must') mustViol++;
+        });
+        problems += mustViol;
+        lines.push(rowLine(mustViol === 0, `${ok}/${ctx.together.length} «sitte sammen» oppfylt`));
     }
-    if (ctx.frontStudents.length) {
-        const front = ctx.minY + (SEAT_H + RGAP) * 1.2;
-        const ok = ctx.frontStudents.filter(id => { const se = seatOf[id]; return se && ctx.seatById[se].y <= front; }).length;
-        problems += ctx.frontStudents.length - ok;
-        lines.push(rowLine(ok === ctx.frontStudents.length, `${ok}/${ctx.frontStudents.length} «foran» oppfylt`));
+    if (ctx.placeWants.length) {
+        const band = (SEAT_H + RGAP) * 1.2;
+        let ok = 0, mustViol = 0;
+        ctx.placeWants.forEach(w => {
+            const se = seatOf[w.id]; let good = false;
+            if (se) { const y = ctx.seatById[se].y; good = w.side === 'front' ? (y <= ctx.minY + band) : (y >= ctx.maxY - band); }
+            if (good) ok++; else if (w.strength === 'must') mustViol++;
+        });
+        problems += mustViol;
+        lines.push(rowLine(mustViol === 0, `${ok}/${ctx.placeWants.length} «foran/bak» oppfylt`));
     }
     if (ctx.prefs.balanceGender) {
         let same = 0, tot = 0;
@@ -435,10 +563,17 @@ function renderBoard() {
                 nm.className = 'tok-name';
                 nm.textContent = stu.name;
                 tok.appendChild(nm);
-                if (stu.needsFront) tok.appendChild(badge('front', '⬆'));
+                if (stu.front) tok.appendChild(badge('front' + (stu.front === 'must' ? ' must' : ''), '⬆'));
+                if (stu.back) tok.appendChild(badge('back' + (stu.back === 'must' ? ' must' : ''), '⬇'));
                 if (isLocked(sid)) tok.appendChild(badge('lock', '🔒'));
                 seatEl.appendChild(tok);
             }
+        }
+        if (editMode) {
+            const del = document.createElement('button');
+            del.className = 'seat-del'; del.type = 'button'; del.title = 'Fjern pult';
+            del.textContent = '✕';
+            seatEl.appendChild(del);
         }
         board.appendChild(seatEl);
     }
@@ -462,26 +597,43 @@ function renderPool() {
         if (stu.gender === 'G') chip.classList.add('g-boy');
         else if (stu.gender === 'J') chip.classList.add('g-girl');
         chip.textContent = stu.name;
-        if (stu.needsFront) chip.appendChild(badge('front', '⬆'));
+        if (stu.front) chip.appendChild(badge('front', '⬆'));
+        if (stu.back) chip.appendChild(badge('back', '⬇'));
         list.appendChild(chip);
     }
     $('poolCount').textContent = unseated.length;
     $('pool').classList.toggle('is-empty', unseated.length === 0);
 }
+const ZOOM_MIN = 0.2, ZOOM_MAX = 3;
 function fitBoard() {
     const stage = $('stage');
     const front = $('boardFront');
+    const barPad = editMode ? 104 : 0; // keep the edit toolbar from covering the bottom row
     const availW = stage.clientWidth - 36;
-    const availH = stage.clientHeight - front.offsetHeight - 52;
+    const availH = stage.clientHeight - front.offsetHeight - 52 - barPad;
     const maxScale = presentMode ? 3 : 1.5;
-    let scale = Math.min(availW / boardW, availH / boardH, maxScale);
-    if (!isFinite(scale) || scale <= 0) scale = 1;
-    scale = Math.max(scale, 0.2);
+    let autoScale = Math.min(availW / boardW, availH / boardH, maxScale);
+    if (!isFinite(autoScale) || autoScale <= 0) autoScale = 1;
+    autoScale = Math.max(autoScale, ZOOM_MIN);
+    const scale = zoom != null ? clamp(zoom, ZOOM_MIN, ZOOM_MAX) : autoScale;
+    boardScale = scale;
     const board = $('board'), wrap = $('boardWrap');
     board.style.transformOrigin = 'top left';
     board.style.transform = 'scale(' + scale + ')';
     wrap.style.width = (boardW * scale) + 'px';
     wrap.style.height = (boardH * scale) + 'px';
+    // scroll slack so a zoomed-in last row can be brought above the edit bar
+    wrap.style.marginBottom = editMode ? '108px' : '';
+    updateZoomLabel();
+}
+function setZoom(z) {
+    zoom = z == null ? null : clamp(z, ZOOM_MIN, ZOOM_MAX);
+    fitBoard();
+}
+function zoomBy(factor) { setZoom(clamp((boardScale || 1) * factor, ZOOM_MIN, ZOOM_MAX)); }
+function updateZoomLabel() {
+    const el = $('zoomLabel');
+    if (el) el.textContent = Math.round((boardScale || 1) * 100) + '%';
 }
 function applySelection() {
     document.querySelectorAll('.selected').forEach(el => el.classList.remove('selected'));
@@ -506,6 +658,7 @@ function updateSelBar() {
 function onPointerDown(e) {
     suppressClick = false;
     if (e.button && e.button !== 0) return;
+    if (editMode) { onEditPointerDown(e); return; }
     const el = e.target.closest('.token, .chip');
     if (!el) return;
     drag = { sid: el.dataset.studentId, el, startX: e.clientX, startY: e.clientY, moved: false, ghost: null };
@@ -566,9 +719,147 @@ function highlightDrop(x, y) {
 }
 function clearDropHighlight() { document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover')); }
 
+/* --------------------------------------------------- manual desk editing    */
+function newSeatId() { return 'seat_' + uid(); }
+function clientToBoard(cx, cy) {
+    const rect = $('board').getBoundingClientRect();
+    const s = boardScale || 1;
+    return { x: (cx - rect.left) / s, y: (cy - rect.top) / s };
+}
+function snap(v, step) { return Math.round(v / step) * step; }
+/* per-axis snap: lands on the lattice, but if the desk is dragged close to a
+ * neighbour in the same row/column it clicks into a tidy pair gap or separation
+ * gap — this is how you build "pairs with a gap between" in either direction.
+ *   raw      – the raw board coordinate on this axis
+ *   crossVal – the (already snapped) coordinate on the other axis
+ *   axis     – 'x' or 'y'                                                      */
+function snapEditAxis(raw, crossVal, axis, selfId) {
+    const horiz = axis === 'x';
+    const step = horiz ? GRID_X : GRID_Y;
+    const crossStep = horiz ? GRID_Y : GRID_X;
+    const pair = horiz ? PAIR_DX : PAIR_DY;
+    const sep = horiz ? SEP_DX : SEP_DY;
+    let n = snap(raw, step);
+    let best = Math.abs(n - raw);
+    for (const s of state.seats) {
+        if (s.id === selfId) continue;
+        const sCross = horiz ? s.y : s.x;
+        if (Math.abs(sCross - crossVal) > crossStep * 0.5) continue; // same row/column band
+        const sMain = horiz ? s.x : s.y;
+        for (const cand of [sMain + pair, sMain - pair, sMain + sep, sMain - sep]) {
+            const d = Math.abs(cand - raw);
+            if (d <= PAIR_SNAP && d < best) { best = d; n = cand; }
+        }
+    }
+    return n;
+}
+
+function enterEditMode() {
+    if (!editMode) {
+        editMode = true;
+        setSelected(null);
+        document.body.classList.add('editing');
+        $('editBar').classList.remove('hidden');
+        render();
+        toast('Rediger pulter – dra, trykk for ny, ✕ for å fjerne', 'ok');
+    }
+}
+function exitEditMode() {
+    if (editMode) {
+        editMode = false;
+        document.body.classList.remove('editing');
+        $('editBar').classList.add('hidden');
+        render();
+    }
+}
+
+function onEditPointerDown(e) {
+    if (e.target.closest('.seat-del')) return; // deletion handled on click
+    const seatEl = e.target.closest('.seat');
+    const start = { x: e.clientX, y: e.clientY };
+    if (seatEl) {
+        const seat = state.seats.find(s => s.id === seatEl.dataset.seatId);
+        if (!seat) return;
+        deskDrag = { type: 'move', seat, el: seatEl, start, originX: seat.x, originY: seat.y, moved: false, before: snapshot() };
+    } else if (e.target.closest('#board') || e.target.closest('.stage')) {
+        deskDrag = { type: 'add', start, moved: false };
+    } else return;
+    window.addEventListener('pointermove', onEditMove);
+    window.addEventListener('pointerup', onEditUp);
+    window.addEventListener('pointercancel', onEditUp);
+    e.preventDefault();
+}
+function onEditMove(e) {
+    if (!deskDrag) return;
+    const dx = e.clientX - deskDrag.start.x, dy = e.clientY - deskDrag.start.y;
+    if (!deskDrag.moved) {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+        deskDrag.moved = true;
+    }
+    if (deskDrag.type !== 'move') return; // dragging empty space does nothing
+    const s = boardScale || 1;
+    const bdx = dx / s, bdy = dy / s;
+    const rx = deskDrag.originX + bdx, ry = deskDrag.originY + bdy;
+    let nx, ny;
+    if (e.altKey) { nx = rx; ny = ry; }                              // free nudge
+    else {                                                            // lattice + pair snapping (both axes)
+        const gx = snap(rx, GRID_X), gy = snap(ry, GRID_Y);
+        nx = snapEditAxis(rx, gy, 'x', deskDrag.seat.id);
+        ny = snapEditAxis(ry, gx, 'y', deskDrag.seat.id);
+    }
+    nx = Math.max(0, nx); ny = Math.max(0, ny);
+    deskDrag.seat.x = nx; deskDrag.seat.y = ny;
+    if (deskDrag.el) { deskDrag.el.style.left = nx + 'px'; deskDrag.el.style.top = ny + 'px'; }
+}
+function onEditUp(e) {
+    window.removeEventListener('pointermove', onEditMove);
+    window.removeEventListener('pointerup', onEditUp);
+    window.removeEventListener('pointercancel', onEditUp);
+    if (!deskDrag) return;
+    const d = deskDrag; deskDrag = null;
+    if (d.type === 'move' && d.moved) { suppressClick = true; pushUndo(d.before); state.roomMode = 'custom'; save(); render(); }
+    else if (d.type === 'add' && !d.moved) { suppressClick = true; addSeatAt(e.clientX, e.clientY); }
+}
+function addSeatAt(cx, cy) {
+    pushUndo();
+    const p = clientToBoard(cx, cy);
+    let x = Math.max(0, snap(p.x - SEAT_W / 2, GRID_X));
+    let y = Math.max(0, snap(p.y - SEAT_H / 2, GRID_Y));
+    while (state.seats.some(s => Math.abs(s.x - x) < 4 && Math.abs(s.y - y) < 4)) x += GRID_X; // avoid stacking
+    state.seats.push({ id: newSeatId(), x, y });
+    state.roomMode = 'custom';
+    save(); render();
+}
+function deleteSeat(seatId) {
+    pushUndo();
+    state.seats = state.seats.filter(s => s.id !== seatId);
+    delete state.assign[seatId]; // any occupant falls back to the pool
+    state.roomMode = 'custom';
+    save(); render();
+}
+function alignAllDesks() {
+    if (!state.seats.length) return;
+    pushUndo();
+    const taken = new Set();
+    state.seats.forEach(s => {
+        let x = Math.max(0, snap(s.x, GRID_X)), y = Math.max(0, snap(s.y, GRID_Y));
+        while (taken.has(x + ',' + y)) x += GRID_X; // never stack two desks on one cell
+        taken.add(x + ',' + y);
+        s.x = x; s.y = y;
+    });
+    state.roomMode = 'custom';
+    save(); render();
+    toast('Pultene er justert til rutenettet', 'ok');
+}
+
 /* ------------------------------------------------------------- tap to swap  */
 function onClick(e) {
     if (suppressClick) { suppressClick = false; return; }
+    if (editMode) {
+        const del = e.target.closest('.seat-del');
+        if (del) { const seatEl = del.closest('.seat'); if (seatEl) deleteSeat(seatEl.dataset.seatId); }
+        return;
+    }
     const tokenEl = e.target.closest('.token, .chip');
     const seatEl = e.target.closest('.seat');
     const poolEl = e.target.closest('#pool');
@@ -601,12 +892,14 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
 
 /* ----------------------------------------------------------- screen control */
 function showApp() {
+    zoom = null;
+    resetUndo();
     $('setup').classList.add('hidden');
     $('app').classList.remove('hidden');
     $('classMenuBtn').firstChild.textContent = state.name + ' ';
     requestAnimationFrame(fitBoard);
 }
-function showSetup() { $('app').classList.add('hidden'); $('setup').classList.remove('hidden'); }
+function showSetup() { if (editMode) exitEditMode(); $('app').classList.add('hidden'); $('setup').classList.remove('hidden'); }
 
 /* ----------------------------------------------- preset classes (Klasser/)  */
 let presetClasses = [];               // [{ name, file }]
@@ -653,7 +946,8 @@ function startNewClass(names, preset, className) {
     const c = normClass({ name: (className && className.trim()) || 'Klasse', room: preset,
         students: names.map(n => ({ name: n })) });
     c.seats = generateSeats(preset, c.students.length);
-    store = store || { activeClassId: null, classes: {} };
+    store = store || { activeClassId: null, classes: {}, roomTemplates: [] };
+    store.roomTemplates = store.roomTemplates || [];
     store.classes[c.id] = c;
     store.activeClassId = c.id;
     state = c;
@@ -683,14 +977,19 @@ function renderRulesList() {
     const list = $('rulesList');
     list.innerHTML = '';
     if (!state.rules.length) { list.innerHTML = '<div class="empty-line">Ingen regler enda.</div>'; return; }
-    state.rules.forEach((r, i) => {
+    // hard (Må) rules first so the important ones read at the top
+    const ordered = state.rules.map((r, i) => ({ r, i }))
+        .sort((x, y) => (((normStrength(y.r.strength) || 'must') === 'must') - ((normStrength(x.r.strength) || 'must') === 'must')));
+    ordered.forEach(({ r, i }) => {
         const a = studentById(r.a), b = studentById(r.b);
         if (!a || !b) return;
+        const st = normStrength(r.strength) || 'must';
         const row = document.createElement('div');
         row.className = 'rule-row';
         const icon = r.type === 'apart' ? '🚫' : '🤝';
         const word = r.type === 'apart' ? 'fra hverandre' : 'sammen';
-        row.innerHTML = `<span>${icon} <strong>${escapeHtml(a.name)}</strong> & <strong>${escapeHtml(b.name)}</strong> – ${word}</span>`;
+        const chip = `<span class="rule-chip ${st}">${st === 'must' ? 'Må' : 'Bør'}</span>`;
+        row.innerHTML = `<span class="rule-text">${chip} ${icon} <strong>${escapeHtml(a.name)}</strong> &amp; <strong>${escapeHtml(b.name)}</strong> – ${word}</span>`;
         const del = document.createElement('button');
         del.className = 'rule-del'; del.textContent = '✕';
         del.addEventListener('click', () => { state.rules.splice(i, 1); save(); renderRulesList(); });
@@ -702,7 +1001,7 @@ function renderRulesList() {
 /* -- roster modal -- */
 let rosterWork = null;
 function openStudentsModal() {
-    rosterWork = state.students.map(s => ({ id: s.id, name: s.name, gender: s.gender, needsFront: s.needsFront, tags: s.tags.slice() }));
+    rosterWork = state.students.map(s => ({ id: s.id, name: s.name, gender: s.gender, front: s.front, back: s.back, tags: s.tags.slice() }));
     renderRoster();
     $('rosterAdd').value = '';
     openModal('studentsModal');
@@ -720,7 +1019,13 @@ function renderRoster() {
                 <button type="button" data-g="J" class="${s.gender === 'J' ? 'on' : ''}">J</button>
                 <button type="button" data-g="" class="${!s.gender ? 'on' : ''}">–</button>
             </div>
-            <label class="r-front"><input type="checkbox" ${s.needsFront ? 'checked' : ''}> foran</label>
+            <select class="r-place" title="Plassering i rommet">
+                <option value="">Fri plass</option>
+                <option value="front-should" ${s.front === 'should' ? 'selected' : ''}>Bør foran</option>
+                <option value="front-must" ${s.front === 'must' ? 'selected' : ''}>Må foran</option>
+                <option value="back-should" ${s.back === 'should' ? 'selected' : ''}>Bør bak</option>
+                <option value="back-must" ${s.back === 'must' ? 'selected' : ''}>Må bak</option>
+            </select>
             <button type="button" class="r-del">✕</button>`;
         row.querySelector('.r-name').addEventListener('input', e => s.name = e.target.value);
         row.querySelectorAll('.r-gender button').forEach(btn => btn.addEventListener('click', () => {
@@ -728,7 +1033,11 @@ function renderRoster() {
             row.querySelectorAll('.r-gender button').forEach(b => b.classList.remove('on'));
             btn.classList.add('on');
         }));
-        row.querySelector('.r-front input').addEventListener('change', e => s.needsFront = e.target.checked);
+        row.querySelector('.r-place').addEventListener('change', e => {
+            const v = e.target.value; // '' | 'front-should' | 'front-must' | 'back-should' | 'back-must'
+            s.front = v.startsWith('front-') ? v.slice(6) : null;
+            s.back = v.startsWith('back-') ? v.slice(5) : null;
+        });
         row.querySelector('.r-del').addEventListener('click', () => { rosterWork.splice(i, 1); renderRoster(); });
         box.appendChild(row);
     });
@@ -737,9 +1046,11 @@ function saveRoster() {
     const names = rosterWork.map(s => (s.name || '').trim()).filter(Boolean);
     if (!names.length) { toast('Listen kan ikke være tom', 'err'); return; }
     // commit working copy back to real students, preserving ids
-    state.students = rosterWork.filter(s => (s.name || '').trim()).map(s => normStudent({ id: s.id, name: s.name.trim(), gender: s.gender, needsFront: s.needsFront, tags: s.tags }));
+    state.students = rosterWork.filter(s => (s.name || '').trim()).map(s => normStudent({ id: s.id, name: s.name.trim(), gender: s.gender, front: s.front, back: s.back, tags: s.tags }));
     pruneInvalid();
-    if (state.seats.length !== state.students.length) regenSeatsPreserve();
+    // auto mode keeps desks == roster; custom mode leaves the fixed arrangement
+    // untouched (surplus students fall back to the pool, empty desks remain).
+    if (state.roomMode !== 'custom' && state.seats.length !== state.students.length) regenSeatsPreserve();
     save(); render();
     closeModal('studentsModal');
     toast('Elevliste oppdatert', 'ok');
@@ -751,7 +1062,88 @@ function openRoomModal() {
     roomChoice = state.room;
     document.querySelectorAll('#roomPresetList .preset').forEach(p => p.classList.toggle('is-active', p.dataset.preset === state.room));
     $('roomKeepSeats').checked = false;
+    const p = state.roomParams || {};
+    const custom = state.roomMode === 'custom';
+    $('roomRows').value = custom && p.rows ? p.rows : '';
+    $('roomPerRow').value = custom && p.perRow ? p.perRow : '';
+    $('roomGapY').value = p.gapY != null ? p.gapY : '';
+    $('roomGapX').value = p.gapX != null ? p.gapX : '';
+    updateRoomConfigUI();
+    renderRoomTemplates();
     openModal('roomModal');
+}
+function updateRoomConfigUI() {
+    const isU = roomChoice === 'u';
+    const lbl = roomChoice === 'pairs' ? 'Par per rad'
+        : roomChoice === 'pods' ? 'Grupper per rad' : 'Pulter per rad';
+    $('roomPerRowLabel').textContent = lbl;
+    $('roomConfig').classList.toggle('is-disabled', isU);
+    $('roomUHint').classList.toggle('hidden', !isU);
+    if (isU) { $('roomRows').value = ''; $('roomPerRow').value = ''; }
+}
+
+/* ---- saved room arrangements (shared across classes, stored on the store) -- */
+function ensureTemplates() { if (store && !store.roomTemplates) store.roomTemplates = []; }
+function normalizeSeatList(seats) {
+    const out = seats.map(s => ({ x: s.x, y: s.y }));
+    if (out.length) {
+        const mnX = Math.min(...out.map(s => s.x)), mnY = Math.min(...out.map(s => s.y));
+        out.forEach(s => { s.x -= mnX; s.y -= mnY; });
+    }
+    return out;
+}
+function saveRoomTemplate() {
+    if (!state.seats.length) { toast('Ingen pulter å lagre', 'err'); return; }
+    const name = (prompt('Navn på oppsettet:', state.name + ' – ' + state.seats.length + ' pulter') || '').trim();
+    if (!name) return;
+    ensureTemplates();
+    store.roomTemplates.push({ id: uid(), name, count: state.seats.length, seats: normalizeSeatList(state.seats) });
+    save();
+    renderRoomTemplates();
+    toast(`Oppsett «${name}» lagret`, 'ok');
+}
+function applyRoomTemplate(id) {
+    ensureTemplates();
+    const t = store.roomTemplates.find(x => x.id === id);
+    if (!t) return;
+    pushUndo();
+    const order = state.students.map(s => s.id);
+    state.seats = (t.seats || []).map((s, i) => ({ id: 'seat' + i, x: s.x, y: s.y }));
+    state.roomMode = 'custom';
+    state.assign = {};
+    state.locked = [];
+    fillSeats(order);
+    save(); render();
+    toast(`Oppsett «${t.name}» tatt i bruk`, 'ok');
+}
+function deleteRoomTemplate(id) {
+    ensureTemplates();
+    const t = store.roomTemplates.find(x => x.id === id);
+    if (t && !confirm(`Slette oppsettet «${t.name}»?`)) return;
+    store.roomTemplates = store.roomTemplates.filter(x => x.id !== id);
+    save(); renderRoomTemplates();
+}
+function renderRoomTemplates() {
+    ensureTemplates();
+    const box = $('roomTplList');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!store.roomTemplates.length) { box.innerHTML = '<div class="empty-line">Ingen lagrede oppsett enda.</div>'; return; }
+    store.roomTemplates.forEach(t => {
+        const row = document.createElement('div');
+        row.className = 'rt-row';
+        const n = t.count != null ? t.count : (t.seats ? t.seats.length : 0);
+        row.innerHTML = `<span><strong>${escapeHtml(t.name)}</strong> <span class="h-meta">${n} pulter</span></span>`;
+        const actions = document.createElement('div');
+        actions.className = 'rt-actions';
+        const use = document.createElement('button'); use.className = 'btn'; use.textContent = 'Bruk';
+        use.addEventListener('click', () => { applyRoomTemplate(t.id); closeModal('roomModal'); });
+        const del = document.createElement('button'); del.className = 'rule-del'; del.textContent = '✕';
+        del.addEventListener('click', () => deleteRoomTemplate(t.id));
+        actions.appendChild(use); actions.appendChild(del);
+        row.appendChild(actions);
+        box.appendChild(row);
+    });
 }
 
 /* -- history modal -- */
@@ -851,6 +1243,7 @@ function importBackup(file) {
             if (!s || !s.classes) throw new Error('ugyldig');
             store = s;
             for (const id in store.classes) store.classes[id] = normClass(store.classes[id]);
+            store.roomTemplates = store.roomTemplates || [];
             if (!store.classes[store.activeClassId]) store.activeClassId = Object.keys(store.classes)[0];
             state = store.classes[store.activeClassId];
             save(); showApp(); render();
@@ -869,6 +1262,8 @@ function downloadBlob(blob, name) {
 
 /* ------------------------------------------------------ present mode (P4)   */
 function enterPresent() {
+    if (editMode) exitEditMode();
+    zoom = null;
     presentMode = true;
     setSelected(null);
     document.body.classList.add('present');
@@ -879,6 +1274,7 @@ function enterPresent() {
 }
 function exitPresent() {
     presentMode = false;
+    zoom = null;
     document.body.classList.remove('present');
     $('presentBar').classList.add('hidden');
     if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
@@ -1017,6 +1413,7 @@ function buildMainMenu() {
     dd.innerHTML = '';
     const items = [
         ['🗂️ Romoppsett', openRoomModal],
+        ['✏️ Rediger pulter', enterEditMode],
         ['🕘 Historikk', openHistoryModal],
         ['sep'],
         ['📄 Eksporter PDF', exportPDF],
@@ -1064,6 +1461,8 @@ function wireApp() {
     $('studentsBtn').addEventListener('click', openStudentsModal);
     $('presentBtn').addEventListener('click', enterPresent);
     $('backBtn').addEventListener('click', () => { setSelected(null); showSetup(); });
+    $('undoBtn').addEventListener('click', undo);
+    $('redoBtn').addEventListener('click', redo);
 
     // class dropdown
     $('classMenuBtn').addEventListener('click', (e) => {
@@ -1090,9 +1489,11 @@ function wireApp() {
     // rules modal
     $('ruleAddBtn').addEventListener('click', () => {
         const a = $('ruleA').value, b = $('ruleB').value, type = $('ruleType').value;
+        const strength = $('ruleStrength').value === 'should' ? 'should' : 'must';
         if (!a || !b || a === b) { toast('Velg to forskjellige elever', 'err'); return; }
-        if (state.rules.some(r => r.type === type && pairKey(r.a, r.b) === pairKey(a, b))) { toast('Regelen finnes allerede', 'err'); return; }
-        state.rules.push({ id: uid(), type, a, b });
+        const existing = state.rules.find(r => r.type === type && pairKey(r.a, r.b) === pairKey(a, b));
+        if (existing) { existing.strength = strength; toast('Regel oppdatert', 'ok'); }
+        else state.rules.push({ id: uid(), type, a, b, strength });
         save(); renderRulesList();
     });
     $('prefBalanceGender').addEventListener('change', e => { state.prefs.balanceGender = e.target.checked; save(); });
@@ -1103,7 +1504,7 @@ function wireApp() {
     $('rosterAddBtn').addEventListener('click', () => {
         const added = parseNames($('rosterAdd').value);
         if (!added.length) return;
-        added.forEach(n => rosterWork.push({ id: uid(), name: n, gender: null, needsFront: false, tags: [] }));
+        added.forEach(n => rosterWork.push({ id: uid(), name: n, gender: null, front: null, back: null, tags: [] }));
         $('rosterAdd').value = '';
         renderRoster();
     });
@@ -1113,10 +1514,23 @@ function wireApp() {
     document.querySelectorAll('#roomPresetList .preset').forEach(btn => btn.addEventListener('click', () => {
         document.querySelectorAll('#roomPresetList .preset').forEach(b => b.classList.remove('is-active'));
         btn.classList.add('is-active'); roomChoice = btn.dataset.preset;
+        updateRoomConfigUI();
     }));
     $('roomApplyBtn').addEventListener('click', () => {
-        applyRoom(roomChoice || state.room, $('roomKeepSeats').checked);
-        closeModal('roomModal'); toast('Romoppsett oppdatert', 'ok');
+        const preset = roomChoice || state.room;
+        const numOrNull = (v, lo, hi) => { const n = parseInt(v, 10); return isNaN(n) ? null : clamp(n, lo, hi); };
+        const rows = numOrNull($('roomRows').value, 1, 20);
+        const perRow = numOrNull($('roomPerRow').value, 1, 20);
+        const custom = preset !== 'u' && rows && perRow;
+        const params = {
+            rows: custom ? rows : null,
+            perRow: custom ? perRow : null,
+            gapY: numOrNull($('roomGapY').value, 0, 200),
+            gapX: numOrNull($('roomGapX').value, 0, 200)
+        };
+        applyRoom(preset, $('roomKeepSeats').checked, params);
+        closeModal('roomModal');
+        toast(custom ? 'Tilpasset oppsett laget' : 'Romoppsett oppdatert', 'ok');
     });
 
     // history modal
@@ -1124,6 +1538,18 @@ function wireApp() {
 
     // results modal
     $('resultsRerunBtn').addEventListener('click', () => { closeModal('resultsModal'); smartArrange(false); });
+
+    // desk-edit mode
+    $('roomEditBtn').addEventListener('click', () => { closeModal('roomModal'); enterEditMode(); });
+    $('editDoneBtn').addEventListener('click', exitEditMode);
+    $('editAlignBtn').addEventListener('click', alignAllDesks);
+    $('editSaveTplBtn').addEventListener('click', saveRoomTemplate);
+    $('roomSaveTplBtn').addEventListener('click', saveRoomTemplate);
+
+    // zoom control
+    $('zoomIn').addEventListener('click', () => zoomBy(1.2));
+    $('zoomOut').addEventListener('click', () => zoomBy(1 / 1.2));
+    $('zoomLabel').addEventListener('click', () => setZoom(null));
 
     // present bar
     $('pShuffle').addEventListener('click', () => shuffleSeating(true));
@@ -1152,13 +1578,21 @@ function wireGlobal() {
         const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
         if (e.key === 'Escape') {
             if (presentMode) { exitPresent(); return; }
+            if (editMode) { exitEditMode(); return; }
             const open = document.querySelector('.modal-overlay.show');
             if (open) { closeModal(open.id); return; }
             closeAllDropdowns();
             if (selected) { setSelected(null); return; }
         }
+        // undo / redo — work in edit mode too, but not while typing in a field
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[zyZY]$/.test(e.key)) {
+            if (typing || $('app').classList.contains('hidden')) return;
+            e.preventDefault();
+            if (e.key === 'y' || e.key === 'Y' || e.shiftKey) redo(); else undo();
+            return;
+        }
         if (typing) return;
-        if ($('app').classList.contains('hidden')) return;
+        if ($('app').classList.contains('hidden') || editMode) return;
         if (e.key === 'r' || e.key === 'R') shuffleSeating(false);
         else if (e.key === 's' && !(e.ctrlKey || e.metaKey)) smartArrange(false);
         else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); save(); toast('Lagret', 'ok'); }
