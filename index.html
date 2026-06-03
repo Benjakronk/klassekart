@@ -203,6 +203,41 @@
     </div>
 </div>
 
+<!-- ============ STUDENT PREFERENCES MODAL ============ -->
+<div class="modal-overlay" id="studentPrefModal">
+    <div class="modal modal-wide">
+        <div class="modal-head">
+            <h2 id="prefTitle">Preferanser</h2>
+            <button class="modal-x" id="prefCloseX" type="button">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="modal-hint">Elevinnspill ført inn av lærer (fra egen kartlegging). Påvirker smart plassering som <strong>myke</strong> ønsker – «Må/Bør»-regler går foran.</p>
+            <div class="pref-sec">
+                <h3 class="sub">🪑 Plassering</h3>
+                <label class="check"><input type="checkbox" id="prefQuiet"> Trenger ro / mye plass (færre naboer)</label>
+                <p class="modal-hint" style="margin-top:6px">«Foran/bak» settes i kolonnen i elevlista.</p>
+            </div>
+            <div class="pref-sec">
+                <h3 class="sub">💚 Trivsel</h3>
+                <div id="prefBelong"></div>
+                <p class="modal-hint" style="margin-top:6px">Elevens egen vurdering (1–5). Brukes i statistikk, ikke i plassering.</p>
+            </div>
+            <div class="pref-sec">
+                <h3 class="sub">🤝 Vil sitte med</h3>
+                <div class="member-picker" id="prefWith"></div>
+            </div>
+            <div class="pref-sec">
+                <h3 class="sub">🚫 Vil helst unngå</h3>
+                <div class="member-picker" id="prefAvoid"></div>
+                <p class="modal-hint" style="margin-top:6px">Sensitivt – vises bare for lærer.</p>
+            </div>
+        </div>
+        <div class="modal-foot">
+            <button class="btn btn-primary" id="prefDoneBtn" type="button">Ferdig</button>
+        </div>
+    </div>
+</div>
+
 <!-- ============ ROOM MODAL ============ -->
 <div class="modal-overlay" id="roomModal">
     <div class="modal">

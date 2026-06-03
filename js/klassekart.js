@@ -117,7 +117,13 @@ function normStudent(s) {
     // front/back are null | 'should' | 'must'; migrate the old boolean needsFront → soft front
     const front = normStrength(s.front) || (s.needsFront ? 'should' : null);
     const back = normStrength(s.back);
-    return { id: s.id || uid(), name: s.name, gender: s.gender || null, front, back: front ? null : back, tags: s.tags || [] };
+    const belong = (s.belong >= 1 && s.belong <= 5) ? (s.belong | 0) : null; // student self-report 1–5
+    return {
+        id: s.id || uid(), name: s.name, gender: s.gender || null, front, back: front ? null : back,
+        quiet: !!s.quiet, belong,
+        wishWith: (s.wishWith || []).slice(), wishAvoid: (s.wishAvoid || []).slice(),
+        tags: s.tags || []
+    };
 }
 function normClass(c) {
     return {
@@ -362,6 +368,10 @@ function pruneInvalid() {
         r.members = (r.members || []).filter(id => ids.has(id) && id !== r.a);
         return r.members.length > 0;
     });
+    state.students.forEach(s => {
+        s.wishWith = (s.wishWith || []).filter(id => id !== s.id && ids.has(id));
+        s.wishAvoid = (s.wishAvoid || []).filter(id => id !== s.id && ids.has(id));
+    });
 }
 
 /* ----------------------------------------------------------- adjacency      */
@@ -429,10 +439,15 @@ function buildContext() {
         }
     });
     const genderOf = {}; const placeWants = []; // {id, side:'front'|'back', strength}
+    // student preferences (teacher-entered): soft signals, weaker than explicit rules
+    const wishWith = [], wishAvoid = [], quiet = new Set();
     state.students.forEach(s => {
         genderOf[s.id] = s.gender;
         if (s.front) placeWants.push({ id: s.id, side: 'front', strength: s.front });
         if (s.back) placeWants.push({ id: s.id, side: 'back', strength: s.back });
+        if (s.quiet) quiet.add(s.id);
+        (s.wishWith || []).forEach(w => wishWith.push({ a: s.id, b: w }));
+        (s.wishAvoid || []).forEach(w => wishAvoid.push({ a: s.id, b: w }));
     });
     let prevPairs = new Set();
     if (state.prefs.avoidRepeat && state.history.length) {
@@ -444,7 +459,7 @@ function buildContext() {
             if (a && b) prevPairs.add(pairKey(a, b));
         });
     }
-    return { adj, edges, minY, maxY, seatById, apart, together, genderOf, placeWants, prevPairs, prefs: state.prefs };
+    return { adj, edges, minY, maxY, seatById, apart, together, genderOf, placeWants, wishWith, wishAvoid, quiet, prevPairs, prefs: state.prefs };
 }
 
 function scoreAssign(assign, ctx) {
@@ -474,6 +489,19 @@ function scoreAssign(assign, ctx) {
         const y = ctx.seatById[se].y;
         const dist = w.side === 'front' ? (y - ctx.minY) : (ctx.maxY - y);
         score += dist * (w.strength === 'must' ? 1.0 : 0.25);
+    }
+    // student preferences — soft (kept below «Bør»-rule weight so explicit rules win)
+    for (const w of ctx.wishWith) {
+        const sa = seatOf[w.a], sb = seatOf[w.b];
+        if (!(sa && sb && ctx.adj[sa].indexOf(sb) !== -1)) score += 15;
+    }
+    for (const w of ctx.wishAvoid) {
+        const sa = seatOf[w.a], sb = seatOf[w.b];
+        if (sa && sb && ctx.adj[sa].indexOf(sb) !== -1) score += 15;
+    }
+    if (ctx.quiet.size) for (const id of ctx.quiet) {
+        const se = seatOf[id];
+        if (se) { let nb = 0; ctx.adj[se].forEach(s => { if (assign[s]) nb++; }); score += nb * 6; }
     }
     return score;
 }
@@ -1129,7 +1157,7 @@ function renderRulesList() {
 /* -- roster modal -- */
 let rosterWork = null;
 function openStudentsModal() {
-    rosterWork = state.students.map(s => ({ id: s.id, name: s.name, gender: s.gender, front: s.front, back: s.back, tags: s.tags.slice() }));
+    rosterWork = state.students.map(s => ({ id: s.id, name: s.name, gender: s.gender, front: s.front, back: s.back, quiet: !!s.quiet, belong: s.belong || null, wishWith: (s.wishWith || []).slice(), wishAvoid: (s.wishAvoid || []).slice(), tags: s.tags.slice() }));
     renderRoster();
     $('rosterAdd').value = '';
     openModal('studentsModal');
@@ -1154,7 +1182,9 @@ function renderRoster() {
                 <option value="back-should" ${s.back === 'should' ? 'selected' : ''}>Bør bak</option>
                 <option value="back-must" ${s.back === 'must' ? 'selected' : ''}>Må bak</option>
             </select>
+            <button type="button" class="r-pref" title="Elevpreferanser">⚙︎${prefSummary(s) ? `<span class="r-pref-badge">${prefSummary(s)}</span>` : ''}</button>
             <button type="button" class="r-del">✕</button>`;
+        row.querySelector('.r-pref').addEventListener('click', () => openStudentPref(i));
         row.querySelector('.r-name').addEventListener('input', e => s.name = e.target.value);
         row.querySelectorAll('.r-gender button').forEach(btn => btn.addEventListener('click', () => {
             s.gender = btn.dataset.g || null;
@@ -1174,7 +1204,7 @@ function saveRoster() {
     const names = rosterWork.map(s => (s.name || '').trim()).filter(Boolean);
     if (!names.length) { toast('Listen kan ikke være tom', 'err'); return; }
     // commit working copy back to real students, preserving ids
-    state.students = rosterWork.filter(s => (s.name || '').trim()).map(s => normStudent({ id: s.id, name: s.name.trim(), gender: s.gender, front: s.front, back: s.back, tags: s.tags }));
+    state.students = rosterWork.filter(s => (s.name || '').trim()).map(s => normStudent({ id: s.id, name: s.name.trim(), gender: s.gender, front: s.front, back: s.back, quiet: s.quiet, belong: s.belong, wishWith: s.wishWith, wishAvoid: s.wishAvoid, tags: s.tags }));
     pruneInvalid();
     // auto mode keeps desks == roster; custom mode leaves the fixed arrangement
     // untouched (surplus students fall back to the pool, empty desks remain).
@@ -1182,6 +1212,57 @@ function saveRoster() {
     save(); render();
     closeModal('studentsModal');
     toast('Elevliste oppdatert', 'ok');
+}
+
+/* -- per-student preferences (edits the rosterWork copy; committed by saveRoster) -- */
+let prefEditIndex = -1;
+function prefSummary(s) {
+    const n = (s.wishWith || []).length + (s.wishAvoid || []).length + (s.quiet ? 1 : 0) + (s.belong ? 1 : 0);
+    return n || 0;
+}
+function dotsControl(box, getVal, setVal) {
+    box.innerHTML = '';
+    const wrap = document.createElement('div'); wrap.className = 'rate';
+    for (let v = 1; v <= 5; v++) {
+        const b = document.createElement('button'); b.type = 'button'; b.title = v + '/5';
+        b.className = v <= (getVal() || 0) ? 'on' : '';
+        b.addEventListener('click', () => { setVal(getVal() === v ? null : v); dotsControl(box, getVal, setVal); });
+        wrap.appendChild(b);
+    }
+    box.appendChild(wrap);
+}
+function fillPrefPicker(box, arr, selfId) {
+    box.innerHTML = '';
+    rosterWork.forEach(o => {
+        if (o.id === selfId || !(o.name || '').trim()) return;
+        const lbl = document.createElement('label'); lbl.className = 'member-chip';
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = arr.indexOf(o.id) !== -1;
+        cb.addEventListener('change', () => {
+            const i = arr.indexOf(o.id);
+            if (cb.checked && i === -1) arr.push(o.id);
+            else if (!cb.checked && i !== -1) arr.splice(i, 1);
+        });
+        lbl.appendChild(cb); lbl.appendChild(document.createTextNode(' ' + o.name));
+        box.appendChild(lbl);
+    });
+    if (!box.children.length) box.innerHTML = '<p class="modal-hint">Legg til flere elever først.</p>';
+}
+function openStudentPref(i) {
+    prefEditIndex = i;
+    const s = rosterWork[i];
+    s.wishWith = s.wishWith || []; s.wishAvoid = s.wishAvoid || [];
+    $('prefTitle').textContent = 'Preferanser – ' + (s.name || 'elev');
+    $('prefQuiet').checked = !!s.quiet;
+    dotsControl($('prefBelong'), () => s.belong, v => { s.belong = v; });
+    fillPrefPicker($('prefWith'), s.wishWith, s.id);
+    fillPrefPicker($('prefAvoid'), s.wishAvoid, s.id);
+    openModal('studentPrefModal');
+}
+function closeStudentPref() {
+    if (prefEditIndex >= 0) { const s = rosterWork[prefEditIndex]; if (s) s.quiet = $('prefQuiet').checked; }
+    closeModal('studentPrefModal');
+    renderRoster();
+    prefEditIndex = -1;
 }
 
 /* -- room modal -- */
@@ -1457,6 +1538,19 @@ function mostPairedOf(st) {
     return best ? { pair: best, count: bc } : null;
 }
 function neverFrontOf(st) { return st.students.filter(s => st.frontCount[s.id] === 0); }
+function belongStats() {
+    const rated = state.students.filter(s => s.belong);
+    const sum = rated.reduce((a, s) => a + s.belong, 0);
+    return { avg: rated.length ? sum / rated.length : null, n: rated.length, low: state.students.filter(s => s.belong && s.belong <= 2) };
+}
+function wishesHonoredNow() {
+    const pairs = []; state.students.forEach(s => (s.wishWith || []).forEach(w => pairs.push(pairKey(s.id, w))));
+    if (!pairs.length) return { ok: 0, total: 0 };
+    const adjset = new Set();
+    computeAdjacency(state.seats).edges.forEach(([s1, s2]) => { const a = state.assign[s1], b = state.assign[s2]; if (a && b) adjset.add(pairKey(a, b)); });
+    let ok = 0; pairs.forEach(k => { if (adjset.has(k)) ok++; });
+    return { ok, total: pairs.length };
+}
 function currentRuleAdherence() {
     if (!state.rules.length) return { ok: 0, total: 0 };
     const ctx = buildContext();
@@ -1527,12 +1621,16 @@ function renderStatsOverview(st) {
     const totG = st.mixedAdj + st.sameAdj, mix = pct(st.mixedAdj, totG);
     const nf = neverFrontOf(st);
     const ra = currentRuleAdherence();
+    const bs = belongStats();
+    const wh = wishesHonoredNow();
 
     const climate = `<div class="q-card"><h3>🌱 Er klasserommet et godt sted å være?</h3>
         <p class="q-sub">Tilhørighet, inkludering og at alle samarbeider bredt.</p>
         ${indHtml({ label: 'Samarbeidsbredde', val: cov + '%', valCls: cov >= 60 ? 'good' : cov >= 30 ? 'warn' : 'bad', pct: cov, meterCls: cov >= 60 ? 'good' : cov >= 30 ? 'warn' : 'bad', note: `${st.distinctAdj} av ${st.possible} mulige par har sittet sammen.` })}
         ${indHtml({ label: 'Elever i fare for isolasjon', val: iso.length, valCls: iso.length ? 'bad' : 'good', note: isoNote })}
         ${indHtml({ label: 'Lærervurdering: miljø', val: st.climateN ? st.avgClimate.toFixed(1) + '/5' : '—', valCls: ratingCls(st.avgClimate), pct: st.climateN ? st.avgClimate / 5 * 100 : 0, meterCls: ratingCls(st.avgClimate), note: st.climateN ? `Snitt av ${st.climateN} vurderte kart.` : 'Vurder kart i Historikk for å fylle dette.' })}
+        ${indHtml({ label: 'Elevtrivsel (egenvurdert)', val: bs.n ? bs.avg.toFixed(1) + '/5' : '—', valCls: ratingCls(bs.avg), pct: bs.n ? bs.avg / 5 * 100 : 0, meterCls: ratingCls(bs.avg), note: bs.n ? (bs.low.length ? `Lav trivsel: ${bs.low.slice(0, 3).map(s => escapeHtml(s.name)).join(', ')}` : `${bs.n} elever vurdert.`) : 'Føres inn per elev under ⚙︎ i elevlista.' })}
+        ${wh.total ? indHtml({ label: 'Ønsker oppfylt nå', val: `${wh.ok}/${wh.total}`, valCls: wh.ok === wh.total ? 'good' : 'warn', pct: pct(wh.ok, wh.total), meterCls: wh.ok === wh.total ? 'good' : 'warn', note: 'Elever som sitter ved en de ønsket (gjeldende kart).' }) : ''}
         ${indHtml({ label: 'Positiv voksenrelasjon', future: 'Relasjonskart kommer', note: 'Importeres fra skolens relasjonskartlegging (grønn/gul/rød).' })}
     </div>`;
     const work = `<div class="q-card work"><h3>🎯 Får vi faktisk gjort arbeid?</h3>
@@ -2013,6 +2111,10 @@ function wireApp() {
         renderRoster();
     });
     $('rosterSaveBtn').addEventListener('click', saveRoster);
+    // student-preferences modal
+    $('prefDoneBtn').addEventListener('click', closeStudentPref);
+    $('prefCloseX').addEventListener('click', closeStudentPref);
+    $('prefQuiet').addEventListener('change', () => { if (prefEditIndex >= 0 && rosterWork[prefEditIndex]) rosterWork[prefEditIndex].quiet = $('prefQuiet').checked; });
 
     // room modal
     document.querySelectorAll('#roomPresetList .preset').forEach(btn => btn.addEventListener('click', () => {

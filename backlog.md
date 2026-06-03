@@ -32,8 +32,12 @@ Three data layers:
   equity, gender/tag balance over time.
 - **Teacher input (opt-in):** per-chart rating on the two headline questions +
   notes ✅ (Phase 2 — rate in Historikk; surfaced as «Lærervurdering» indicators
-  + a trend in stats). REMAINING (Phase 2b): student preference input (teacher-
-  entered from a separate session); tag-based grouping/balance.
+  + a trend in stats).
+  - Phase 2b student preference input ✅ (per-student ⚙︎ editor: sit-with &
+    avoid wishes [soft in placement], quiet/space, belonging 1–5). Surfaced as
+    «Elevtrivsel» + «Ønsker oppfylt nå» indicators.
+  - REMAINING (Phase 2c): tag-based grouping/balance (use the `tags` field to
+    balance traits across groups + a balance stat + optimizer term).
 - **Imported (sensitive):** teacher–student **Relationship Mapping** data
   (green/yellow/red/white, both directions) to flag students lacking a positive
   adult relationship and prompt staff mindfulness. SEE DATA-PROTECTION NOTE.
