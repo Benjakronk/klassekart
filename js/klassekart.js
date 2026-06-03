@@ -1276,15 +1276,34 @@ function renderRoomTemplates() {
 
 /* -- history modal -- */
 function openHistoryModal() { renderHistory(); openModal('historyModal'); }
+/* 1–5 rating control; clicking the current value clears it */
+function ratingDots(h, key, cls) {
+    const wrap = document.createElement('div');
+    wrap.className = 'rate' + (cls ? ' ' + cls : '');
+    const cur = (h.rating && h.rating[key]) || 0;
+    for (let v = 1; v <= 5; v++) {
+        const b = document.createElement('button'); b.type = 'button';
+        b.className = v <= cur ? 'on' : ''; b.title = v + '/5';
+        b.addEventListener('click', () => {
+            h.rating = h.rating || {};
+            h.rating[key] = h.rating[key] === v ? null : v;
+            save(); renderHistory();
+        });
+        wrap.appendChild(b);
+    }
+    return wrap;
+}
 function renderHistory() {
     const box = $('historyList');
     box.innerHTML = '';
     if (!state.history.length) { box.innerHTML = '<div class="empty-line">Ingen lagrede kart enda.</div>'; return; }
     state.history.forEach((h, i) => {
         const row = document.createElement('div');
-        row.className = 'history-row';
+        row.className = 'history-row hist-card';
         const placed = Object.keys(h.assign || {}).length;
-        row.innerHTML = `<span><strong>${escapeHtml(h.label || ('Kart ' + (i + 1)))}</strong><br><span class="h-meta">${escapeHtml(h.dateStr || '')} · ${placed} plassert</span></span>`;
+        const top = document.createElement('div');
+        top.className = 'hist-top';
+        top.innerHTML = `<span><strong>${escapeHtml(h.label || ('Kart ' + (i + 1)))}</strong><br><span class="h-meta">${escapeHtml(h.dateStr || '')} · ${placed} plassert</span></span>`;
         const actions = document.createElement('div');
         actions.className = 'history-actions';
         const restore = document.createElement('button'); restore.className = 'btn'; restore.textContent = 'Gjenopprett';
@@ -1292,7 +1311,22 @@ function renderHistory() {
         const del = document.createElement('button'); del.className = 'rule-del'; del.textContent = '✕';
         del.addEventListener('click', () => { state.history.splice(i, 1); save(); renderHistory(); });
         actions.appendChild(restore); actions.appendChild(del);
-        row.appendChild(actions);
+        top.appendChild(actions);
+        row.appendChild(top);
+
+        const rm = document.createElement('div'); rm.className = 'rating-row';
+        rm.innerHTML = '<span class="rr-label">🌱 Miljø</span>'; rm.appendChild(ratingDots(h, 'climate'));
+        const rw = document.createElement('div'); rw.className = 'rating-row';
+        rw.innerHTML = '<span class="rr-label">🎯 Arbeid</span>'; rw.appendChild(ratingDots(h, 'work', 'work'));
+        row.appendChild(rm); row.appendChild(rw);
+
+        const note = document.createElement('input');
+        note.type = 'text'; note.className = 'h-note';
+        note.placeholder = 'Notat (valgfritt) – hvordan fungerte dette kartet?';
+        note.value = (h.rating && h.rating.note) || '';
+        note.addEventListener('change', () => { h.rating = h.rating || {}; h.rating.note = note.value.trim(); save(); });
+        row.appendChild(note);
+
         box.appendChild(row);
     });
 }
@@ -1300,6 +1334,7 @@ function saveHistory() {
     const dateStr = new Date().toLocaleString('no-NO', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     state.history.unshift({
         id: uid(),
+        ts: Date.now(),
         label: 'Lagret ' + new Date().toLocaleDateString('no-NO', { day: 'numeric', month: 'short' }),
         dateStr,
         room: state.room,
@@ -1319,6 +1354,333 @@ function restoreHistory(i) {
     pruneInvalid();
     save(); render();
     toast('Kart gjenopprettet', 'ok');
+}
+
+/* ----------------------------------------------------------- statistics     */
+/* Phase 1: derived from saved history only (saving is required). Adjacency
+ * (deskmates) and co-group (same cluster) are tallied separately. Display is
+ * restricted to the current roster. Research basis: docs/research.md. */
+let statsData = null, statsMatrixMode = 'adj', statsAimId = null;
+
+const STAT_PALETTE = [
+    { bg: '#4f46e5', fg: '#fff' }, { bg: '#0ea5e9', fg: '#fff' }, { bg: '#16a34a', fg: '#fff' },
+    { bg: '#f59e0b', fg: '#3b2600' }, { bg: '#e11d48', fg: '#fff' }, { bg: '#7c3aed', fg: '#fff' },
+    { bg: '#0d9488', fg: '#fff' }, { bg: '#db2777', fg: '#fff' }
+];
+function hashCode(str) { let h = 0; for (let i = 0; i < str.length; i++) { h = (h << 5) - h + str.charCodeAt(i); h |= 0; } return Math.abs(h); }
+function avatarColor(id) { return STAT_PALETTE[hashCode(String(id)) % STAT_PALETTE.length]; }
+function avatarHtml(stu) {
+    const c = avatarColor(stu.id), init = (stu.name.trim()[0] || '?').toUpperCase();
+    return `<span class="avatar" style="background:${c.bg};color:${c.fg}">${escapeHtml(init)}</span>`;
+}
+function genderById(id) { const s = studentById(id); return s ? s.gender : null; }
+
+/* connected components over tight (within-group) orthogonal edges */
+function clustersOf(seats) {
+    const n = seats.length, parent = seats.map((_, i) => i);
+    const find = x => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        const a = seats[i], b = seats[j], dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
+        const h = dy <= SEAT_H * 0.5 && dx > SEAT_W * 0.5 && dx - SEAT_W <= ADJ_TIGHT_H;
+        const v = dx <= SEAT_W * 0.5 && dy > SEAT_H * 0.5 && dy - SEAT_H <= ADJ_TIGHT_V;
+        if (h || v) parent[find(i)] = find(j);
+    }
+    const groups = {}; seats.forEach((s, i) => { const r = find(i); (groups[r] || (groups[r] = [])).push(s.id); });
+    return Object.values(groups).filter(g => g.length > 1);
+}
+
+function computeStats() {
+    const students = state.students, n = students.length;
+    const idset = new Set(students.map(s => s.id));
+    const charts = [...state.history].reverse(); // oldest -> newest
+    const adjCount = new Map(), coCount = new Map();
+    const adjReach = {}, coReach = {}, frontCount = {}, backCount = {};
+    students.forEach(s => { adjReach[s.id] = new Set(); coReach[s.id] = new Set(); frontCount[s.id] = 0; backCount[s.id] = 0; });
+    let mixedAdj = 0, sameAdj = 0;
+    const coverageSeries = [], seenAdj = new Set();
+    let sumC = 0, nC = 0, sumW = 0, nW = 0; const cSeries = [], wSeries = [];
+    const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+    charts.forEach(h => {
+        const r = h.rating;
+        if (r) {
+            if (r.climate) { sumC += r.climate; nC++; cSeries.push(r.climate); }
+            if (r.work) { sumW += r.work; nW++; wSeries.push(r.work); }
+        }
+        const seats = h.seats || [], assign = h.assign || {};
+        if (!seats.length) return;
+        computeAdjacency(seats, h.room).edges.forEach(([s1, s2]) => {
+            const a = assign[s1], b = assign[s2]; if (!a || !b) return;
+            const k = pairKey(a, b); bump(adjCount, k);
+            if (adjReach[a]) adjReach[a].add(b); if (adjReach[b]) adjReach[b].add(a);
+            const ga = genderById(a), gb = genderById(b); if (ga && gb) { ga === gb ? sameAdj++ : mixedAdj++; }
+            if (idset.has(a) && idset.has(b)) seenAdj.add(k);
+        });
+        clustersOf(seats).forEach(cl => {
+            const ids = cl.map(sid => assign[sid]).filter(Boolean);
+            for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+                bump(coCount, pairKey(ids[i], ids[j]));
+                if (coReach[ids[i]]) coReach[ids[i]].add(ids[j]); if (coReach[ids[j]]) coReach[ids[j]].add(ids[i]);
+            }
+        });
+        const ys = seats.map(s => s.y), minY = Math.min(...ys), maxY = Math.max(...ys), band = (SEAT_H + RGAP) * 1.2;
+        seats.forEach(s => { const sid = assign[s.id]; if (sid === undefined || frontCount[sid] === undefined) return; if (s.y <= minY + band) frontCount[sid]++; if (s.y >= maxY - band) backCount[sid]++; });
+        coverageSeries.push(seenAdj.size);
+    });
+    return {
+        n, charts: charts.length, students, idset, adjCount, coCount, adjReach, coReach,
+        frontCount, backCount, mixedAdj, sameAdj, coverageSeries,
+        possible: n > 1 ? n * (n - 1) / 2 : 0, distinctAdj: seenAdj.size,
+        avgClimate: nC ? sumC / nC : null, climateN: nC, avgWork: nW ? sumW / nW : null, workN: nW,
+        cSeries, wSeries
+    };
+}
+
+/* small derived queries */
+function combinedCount(st, k) { return (st.adjCount.get(k) || 0) + (st.coCount.get(k) || 0); }
+function reachOf(st, id) { return st.adjReach[id] ? st.adjReach[id].size : 0; }
+function isolatesOf(st) {
+    const thr = Math.max(1, Math.round((st.n - 1) * 0.25));
+    return st.students.map(s => ({ s, r: reachOf(st, s.id) })).filter(x => x.r < thr).sort((a, b) => a.r - b.r);
+}
+function neverTogetherOf(st) {
+    const out = []; const ss = st.students;
+    for (let i = 0; i < ss.length; i++) for (let j = i + 1; j < ss.length; j++)
+        if (combinedCount(st, pairKey(ss[i].id, ss[j].id)) === 0) out.push([ss[i], ss[j]]);
+    return out;
+}
+function mostPairedOf(st) {
+    let best = null, bc = 0;
+    const ss = st.students;
+    for (let i = 0; i < ss.length; i++) for (let j = i + 1; j < ss.length; j++) {
+        const c = combinedCount(st, pairKey(ss[i].id, ss[j].id)); if (c > bc) { bc = c; best = [ss[i], ss[j]]; }
+    }
+    return best ? { pair: best, count: bc } : null;
+}
+function neverFrontOf(st) { return st.students.filter(s => st.frontCount[s.id] === 0); }
+function currentRuleAdherence() {
+    if (!state.rules.length) return { ok: 0, total: 0 };
+    const ctx = buildContext();
+    const seatOf = {}; for (const seatId in state.assign) seatOf[state.assign[seatId]] = seatId;
+    const adjacentNow = new Set();
+    ctx.edges.forEach(([s1, s2]) => { const a = state.assign[s1], b = state.assign[s2]; if (a && b) adjacentNow.add(pairKey(a, b)); });
+    let ok = 0, total = 0;
+    ctx.apart.forEach((st, k) => { total++; if (!adjacentNow.has(k)) ok++; });
+    ctx.together.forEach(t => { total++; const sa = seatOf[t.a]; if (sa && ctx.adj[sa].some(nb => t.members.has(state.assign[nb]))) ok++; });
+    return { ok, total };
+}
+
+/* ---- render helpers ---- */
+const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+function clampPct(x) { return Math.max(0, Math.min(100, x)); }
+function ratingCls(v) { return v == null ? '' : v >= 4 ? 'good' : v >= 2.5 ? 'warn' : 'bad'; }
+function dualSparkHtml(a, b, max) {
+    const W = 600, H = 60;
+    const path = (series, color) => {
+        if (series.length < 2) return '';
+        const pts = series.map((v, i) => [i / (series.length - 1) * W, H - (v / max) * (H - 8) - 4]);
+        const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+        return `<path d="${d}" fill="none" stroke="${color}" stroke-width="2.5"></path>` +
+            pts.map(p => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="${color}"></circle>`).join('');
+    };
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${path(a, 'var(--ok)')}${path(b, '#0ea5e9')}</svg>`;
+}
+function meterHtml(p, cls) { return `<div class="meter"><div class="meter-fill ${cls || ''}" style="width:${clampPct(p)}%"></div></div>`; }
+function indHtml(o) {
+    const vcls = o.valCls ? ' ' + o.valCls : '';
+    return `<div class="ind"><div class="ind-top"><span class="ind-label">${o.label}</span>` +
+        (o.future ? `<span class="pill-future">${o.future}</span>` : `<span class="ind-val${vcls}">${o.val}</span>`) +
+        `</div>${o.pct != null ? meterHtml(o.pct, o.meterCls) : ''}` +
+        (o.note ? `<p class="ind-note">${o.note}</p>` : '') + `</div>`;
+}
+
+/* ---- panes ---- */
+function openStatsModal() {
+    statsData = computeStats();
+    statsMatrixMode = 'adj';
+    statsAimId = STAT_AIMS[0].id;
+    renderStatsOverview(statsData);
+    renderStatsPatterns(statsData);
+    renderStatsAims(statsData);
+    setStatsTab('overview');
+    openModal('statsModal');
+}
+function setStatsTab(name) {
+    document.querySelectorAll('#statsTabs .stats-tab').forEach(t => t.classList.toggle('is-active', t.dataset.tab === name));
+    const map = { overview: 'statsOverview', patterns: 'statsPatterns', aims: 'statsAims' };
+    for (const key in map) {
+        const el = $(map[key]), on = key === name;
+        el.classList.toggle('hidden', !on);
+        el.classList.toggle('is-active', on);
+        if (on) { el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; } // restart stagger
+    }
+}
+
+function renderStatsOverview(st) {
+    const box = $('statsOverview');
+    if (!st.charts) {
+        box.innerHTML = `<div class="stats-empty">Ingen lagrede kart enda.<br><strong>Lagre kart i historikken</strong> for å bygge opp statistikk over hvem som har samarbeidet.</div>`;
+        return;
+    }
+    const cov = pct(st.distinctAdj, st.possible);
+    const iso = isolatesOf(st);
+    const isoNote = iso.length ? 'Lavest: ' + iso.slice(0, 3).map(x => `${escapeHtml(x.s.name)} (${x.r})`).join(', ') : 'Alle har god bredde i hvem de samarbeider med.';
+    const totG = st.mixedAdj + st.sameAdj, mix = pct(st.mixedAdj, totG);
+    const nf = neverFrontOf(st);
+    const ra = currentRuleAdherence();
+
+    const climate = `<div class="q-card"><h3>🌱 Er klasserommet et godt sted å være?</h3>
+        <p class="q-sub">Tilhørighet, inkludering og at alle samarbeider bredt.</p>
+        ${indHtml({ label: 'Samarbeidsbredde', val: cov + '%', valCls: cov >= 60 ? 'good' : cov >= 30 ? 'warn' : 'bad', pct: cov, meterCls: cov >= 60 ? 'good' : cov >= 30 ? 'warn' : 'bad', note: `${st.distinctAdj} av ${st.possible} mulige par har sittet sammen.` })}
+        ${indHtml({ label: 'Elever i fare for isolasjon', val: iso.length, valCls: iso.length ? 'bad' : 'good', note: isoNote })}
+        ${indHtml({ label: 'Lærervurdering: miljø', val: st.climateN ? st.avgClimate.toFixed(1) + '/5' : '—', valCls: ratingCls(st.avgClimate), pct: st.climateN ? st.avgClimate / 5 * 100 : 0, meterCls: ratingCls(st.avgClimate), note: st.climateN ? `Snitt av ${st.climateN} vurderte kart.` : 'Vurder kart i Historikk for å fylle dette.' })}
+        ${indHtml({ label: 'Positiv voksenrelasjon', future: 'Relasjonskart kommer', note: 'Importeres fra skolens relasjonskartlegging (grønn/gul/rød).' })}
+    </div>`;
+    const work = `<div class="q-card work"><h3>🎯 Får vi faktisk gjort arbeid?</h3>
+        <p class="q-sub">Engasjement, rettferdig plassering og at reglene holder.</p>
+        ${indHtml({ label: 'Aldri sittet foran', val: nf.length, valCls: nf.length ? 'warn' : 'good', note: nf.length ? nf.slice(0, 4).map(s => escapeHtml(s.name)).join(', ') + (nf.length > 4 ? ' …' : '') : 'Tilgangen til de fremre plassene er spredt.' })}
+        ${indHtml({ label: 'Kjønnsblanding ved pulter', val: totG ? mix + '%' : '—', pct: totG ? mix : 0, note: totG ? 'Andel nabopar på tvers av kjønn.' : 'Sett kjønn på elevene for å måle dette.' })}
+        ${indHtml({ label: 'Lærervurdering: arbeid', val: st.workN ? st.avgWork.toFixed(1) + '/5' : '—', valCls: ratingCls(st.avgWork), pct: st.workN ? st.avgWork / 5 * 100 : 0, meterCls: ratingCls(st.avgWork), note: st.workN ? `Snitt av ${st.workN} vurderte kart.` : 'Vurder kart i Historikk for å fylle dette.' })}
+        ${ra.total ? indHtml({ label: 'Regler oppfylt nå', val: `${ra.ok}/${ra.total}`, valCls: ra.ok === ra.total ? 'good' : 'warn', pct: pct(ra.ok, ra.total), meterCls: ra.ok === ra.total ? 'good' : 'warn', note: 'Gjeldende kart mot «Må/Bør»-reglene.' }) : indHtml({ label: 'Regler oppfylt nå', val: '—', note: 'Ingen regler satt enda.' })}
+    </div>`;
+    box.innerHTML = `<div class="q-grid">${climate}${work}</div>
+        <p class="modal-hint" style="margin-top:16px">Bygget på ${st.charts} lagrede kart. Mer data = sikrere tall. Forskningsgrunnlag i <strong>docs/research.md</strong>.</p>`;
+}
+
+function heatmapHtml(st, mode) {
+    const ss = [...st.students].sort((a, b) => a.name.localeCompare(b.name, 'nb'));
+    const n = ss.length;
+    if (!n) return '';
+    const get = (a, b) => mode === 'co' ? (st.coCount.get(pairKey(a, b)) || 0) : mode === 'both' ? combinedCount(st, pairKey(a, b)) : (st.adjCount.get(pairKey(a, b)) || 0);
+    let max = 1;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) max = Math.max(max, get(ss[i].id, ss[j].id));
+    let html = `<div class="hm" style="grid-template-columns:minmax(96px,auto) repeat(${n},22px)">`;
+    html += `<div class="hm-corner"></div>`;
+    ss.forEach(s => { html += `<div class="hm-clabel">${escapeHtml(s.name)}</div>`; });
+    ss.forEach((row, i) => {
+        html += `<div class="hm-rlabel">${escapeHtml(row.name)}</div>`;
+        ss.forEach((col, j) => {
+            if (i === j) { html += `<div class="hm-cell hm-diag"></div>`; return; }
+            const c = get(row.id, col.id);
+            const a = c ? (0.15 + 0.85 * (c / max)) : 0;
+            const bg = c ? `rgba(79,70,229,${a.toFixed(3)})` : 'var(--bg)';
+            html += `<div class="hm-cell" style="background:${bg}" title="${escapeHtml(row.name)} &amp; ${escapeHtml(col.name)} — ${c}×"></div>`;
+        });
+    });
+    return html + `</div>`;
+}
+
+function relGraphHtml(st) {
+    const ss = st.students, n = ss.length;
+    if (n < 2) return '<p class="ind-note">Trenger minst to elever.</p>';
+    const S = 520, c = S / 2, R = S / 2 - 46, nodeR = 13;
+    const pos = ss.map((s, i) => { const ang = -Math.PI / 2 + i * 2 * Math.PI / n; return { s, x: c + R * Math.cos(ang), y: c + R * Math.sin(ang) }; });
+    let max = 1;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) max = Math.max(max, st.adjCount.get(pairKey(ss[i].id, ss[j].id)) || 0);
+    let edges = '';
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        const cnt = st.adjCount.get(pairKey(ss[i].id, ss[j].id)) || 0; if (!cnt) continue;
+        const o = (0.1 + 0.55 * (cnt / max)).toFixed(3), w = (0.8 + 2.6 * (cnt / max)).toFixed(2);
+        edges += `<line class="edge" x1="${pos[i].x.toFixed(1)}" y1="${pos[i].y.toFixed(1)}" x2="${pos[j].x.toFixed(1)}" y2="${pos[j].y.toFixed(1)}" stroke-opacity="${o}" stroke-width="${w}"></line>`;
+    }
+    let nodes = '';
+    pos.forEach(p => {
+        const col = avatarColor(p.s.id), init = (p.s.name.trim()[0] || '?').toUpperCase();
+        nodes += `<g><title>${escapeHtml(p.s.name)}</title><circle class="node" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${nodeR}" style="fill:${col.bg};stroke:#fff;stroke-width:2"></circle>` +
+            `<text class="node-label" x="${p.x.toFixed(1)}" y="${p.y.toFixed(1)}" style="fill:${col.fg}">${escapeHtml(init)}</text></g>`;
+    });
+    return `<svg class="relgraph" viewBox="0 0 ${S} ${S}" role="img" aria-label="Relasjonsgraf">${edges}${nodes}</svg>`;
+}
+
+function reachBarsHtml(st) {
+    const rows = st.students.map(s => ({ s, r: reachOf(st, s.id) })).sort((a, b) => a.r - b.r);
+    const denom = Math.max(1, st.n - 1);
+    return rows.map(x => `<div class="bar-row"><span class="bar-name">${avatarHtml(x.s)}${escapeHtml(x.s.name)}</span>` +
+        `<span class="bar-track"><span class="bar-val" style="width:${pct(x.r, denom)}%"></span></span>` +
+        `<span class="bar-num">${x.r}/${denom}</span></div>`).join('');
+}
+
+function sparkHtml(series, possible) {
+    if (series.length < 2) return '<p class="ind-note">Trenger flere lagrede kart for en trend.</p>';
+    const W = 600, H = 56, max = possible || Math.max(...series, 1);
+    const pts = series.map((v, i) => [i / (series.length - 1) * W, H - (v / max) * (H - 6) - 3]);
+    const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+    const area = `M0 ${H} ` + pts.map(p => 'L' + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ') + ` L${W} ${H} Z`;
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><path class="spk-area" d="${area}"></path><path class="spk-line" d="${line}"></path></svg>`;
+}
+
+function renderStatsPatterns(st) {
+    const box = $('statsPatterns');
+    if (!st.charts) { box.innerHTML = `<div class="stats-empty">Lagre noen kart først, så dukker mønstrene opp her.</div>`; return; }
+    const seg = (m, lbl) => `<button data-mode="${m}" class="${statsMatrixMode === m ? 'on' : ''}">${lbl}</button>`;
+    box.innerHTML =
+        `<div class="viz-block"><div class="viz-head"><div><h3>Hvem har sittet sammen</h3><p>Mørkere = oftere. Diagonalen er eleven selv.</p></div>
+            <div class="seg">${seg('adj', 'Naboer')}${seg('co', 'Gruppe')}${seg('both', 'Begge')}</div></div>
+            <div class="hm-wrap">${heatmapHtml(st, statsMatrixMode)}</div></div>
+        <div class="viz-block"><div class="viz-head"><div><h3>Relasjonsgraf</h3><p>Naboforhold over tid. Tette streker = hyppige par; elever i utkanten samarbeider smalt.</p></div></div>
+            ${relGraphHtml(st)}</div>
+        <div class="viz-block"><div class="viz-head"><div><h3>Sosial rekkevidde</h3><p>Antall ulike elever hver har vært nabo med (lavest først).</p></div></div>
+            ${reachBarsHtml(st)}</div>
+        <div class="viz-block"><div class="viz-head"><div><h3>Dekningsgrad over tid</h3><p>Hvor stor andel av alle mulige par som er realisert, kart for kart.</p></div></div>
+            ${sparkHtml(st.coverageSeries, st.possible)}</div>` +
+        ((st.cSeries.length >= 2 || st.wSeries.length >= 2) ?
+            `<div class="viz-block"><div class="viz-head"><div><h3>Lærervurdering over tid</h3><p><span style="color:var(--ok);font-weight:700">●</span> Miljø &nbsp; <span style="color:#0ea5e9;font-weight:700">●</span> Arbeid &nbsp;(1–5, kart for kart)</p></div></div>
+            ${dualSparkHtml(st.cSeries, st.wSeries, 5)}</div>` : '');
+}
+
+const STAT_AIMS = [
+    {
+        id: 'relations', label: '🤝 Bredere relasjoner', goal: 'Sørg for at alle samarbeider med flere – ingen blir isolert over tid.',
+        tips: [
+            ['Sett elever ved siden av noen de aldri har sittet med. Bredde i samarbeid styrker tilhørighet.', 'Tilhørighet – Allen m.fl.'],
+            ['Følg ekstra med på elever med lav «sosial rekkevidde» – de havner ofte hos de samme.', 'Relasjonskartlegging – Harvard MCC'],
+            ['Kjør «Smart plassering» jevnlig for å rotere naboer i stedet for å la vanen styre.', 'Praksis']
+        ],
+        callout: st => { const nt = neverTogetherOf(st); const ex = nt.slice(0, 3).map(p => `${escapeHtml(p[0].name)} & ${escapeHtml(p[1].name)}`).join(', '); return `<strong>${nt.length}</strong> par har aldri sittet sammen.${ex ? ' F.eks. ' + ex + '.' : ''}`; }
+    },
+    {
+        id: 'focus', label: '🎯 Mindre uro, mer fokus', goal: 'Reduser forstyrrelser og hold oppmerksomheten i timen.',
+        tips: [
+            ['Plasser lett distraherte elever nærmere tavla og læreren.', 'Plassering & engasjement'],
+            ['Hold kjente «uro-par» fra hverandre med en «Må – ikke ved siden av»-regel.', 'Klasseledelse – Korpershoek 2016'],
+            ['Sosioemosjonelt rettede tiltak gir størst effekt på klassemiljøet.', 'Korpershoek 2016']
+        ],
+        callout: st => { const ra = currentRuleAdherence(); return ra.total ? `Gjeldende kart oppfyller <strong>${ra.ok}/${ra.total}</strong> regler.` : 'Ingen regler satt enda – lag noen i «Regler».'; }
+    },
+    {
+        id: 'hetero', label: '🧩 Blandede grupper', goal: 'Sett sammen grupper som er faglig og sosialt blandet.',
+        tips: [
+            ['Heterogene grupper fremmer både læring og gode relasjoner.', 'Samarbeidslæring – Johnson & Johnson'],
+            ['Unngå at den samme «klikken» alltid havner sammen – bland dem opp.', 'Samarbeidslæring']
+        ],
+        callout: st => { const mp = mostPairedOf(st); return mp && mp.count > 1 ? `Oftest sammen: <strong>${escapeHtml(mp.pair[0].name)} & ${escapeHtml(mp.pair[1].name)}</strong> (${mp.count}×). Vurder å bryte opp vanen.` : 'Ingen tydelige faste par enda.'; }
+    },
+    {
+        id: 'equity', label: '⚖️ Rettferdig plassering', goal: 'Spre tilgangen til de gode plassene foran.',
+        tips: [
+            ['Roter hvem som sitter foran – de bakerste rekkene deltar og presterer ofte mindre.', 'Plassering & engasjement'],
+            ['Bruk «Foran/bak»-ønsker bevisst, men ikke la de samme alltid sitte bakerst.', 'Praksis']
+        ],
+        callout: st => { const nf = neverFrontOf(st); return nf.length ? `<strong>${nf.length}</strong> elever har aldri sittet foran: ${nf.slice(0, 4).map(s => escapeHtml(s.name)).join(', ')}${nf.length > 4 ? ' …' : ''}.` : 'Tilgangen til de fremre plassene er godt spredt.'; }
+    },
+    {
+        id: 'belonging', label: '💚 Tilhørighet & miljø', goal: 'Bygg et trygt klassemiljø der hver elev hører til.',
+        tips: [
+            ['Tilhørighet henger sammen med motivasjon, atferd og læring.', 'Tilhørighet – metaanalyser'],
+            ['Sørg for at hver elev har minst én positiv voksenrelasjon på skolen.', 'Relasjonskartlegging – Harvard MCC'],
+            ['Gode lærer–elev-relasjoner løfter både engasjement og prestasjoner.', 'Roorda m.fl. 2011']
+        ],
+        callout: st => { const iso = isolatesOf(st); return iso.length ? `<strong>${iso.length}</strong> elever ser ut til å samarbeide smalt – verdt å følge opp.` : 'Ingen elever peker seg ut som isolerte akkurat nå.'; }
+    }
+];
+
+function renderStatsAims(st) {
+    const box = $('statsAims');
+    const chips = STAT_AIMS.map(a => `<button class="aim ${a.id === statsAimId ? 'is-active' : ''}" data-aim="${a.id}" type="button">${a.label}</button>`).join('');
+    const aim = STAT_AIMS.find(a => a.id === statsAimId) || STAT_AIMS[0];
+    const tips = aim.tips.map(([t, src]) => `<div class="tip"><div class="tip-text">${escapeHtml(t)}</div><span class="tip-src">${escapeHtml(src)}</span></div>`).join('');
+    const callout = st.charts ? `<div class="callout">${aim.callout(st)}</div>` : '';
+    box.innerHTML = `<div class="aim-list">${chips}</div><p class="aim-goal">${escapeHtml(aim.goal)}</p>${callout}${tips}
+        <p class="modal-hint" style="margin-top:14px">Rådene er forskningsbaserte – kilder i <strong>docs/research.md</strong>.</p>`;
 }
 
 /* ------------------------------------------------------- class management   */
@@ -1543,6 +1905,7 @@ function buildMainMenu() {
         ['🗂️ Romoppsett', openRoomModal],
         ['✏️ Rediger pulter', enterEditMode],
         ['🕘 Historikk', openHistoryModal],
+        ['📊 Statistikk', openStatsModal],
         ['sep'],
         ['📄 Eksporter PDF', exportPDF],
         ['🖼️ Eksporter PNG', exportPNG],
@@ -1676,6 +2039,15 @@ function wireApp() {
 
     // history modal
     $('historySaveBtn').addEventListener('click', saveHistory);
+
+    // statistics modal
+    $('statsTabs').addEventListener('click', e => { const t = e.target.closest('.stats-tab'); if (t) setStatsTab(t.dataset.tab); });
+    $('statsModal').addEventListener('click', e => {
+        const seg = e.target.closest('[data-mode]');
+        if (seg) { statsMatrixMode = seg.dataset.mode; renderStatsPatterns(statsData); return; }
+        const aim = e.target.closest('[data-aim]');
+        if (aim) { statsAimId = aim.dataset.aim; renderStatsAims(statsData); }
+    });
 
     // results modal
     $('resultsRerunBtn').addEventListener('click', () => { closeModal('resultsModal'); smartArrange(false); });

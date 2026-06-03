@@ -278,6 +278,26 @@
     </div>
 </div>
 
+<!-- ============ STATISTICS MODAL ============ -->
+<div class="modal-overlay" id="statsModal">
+    <div class="modal modal-stats">
+        <div class="modal-head">
+            <h2>Statistikk</h2>
+            <button class="modal-x" data-close="statsModal" type="button">&times;</button>
+        </div>
+        <div class="stats-tabs" id="statsTabs">
+            <button class="stats-tab is-active" data-tab="overview" type="button">Oversikt</button>
+            <button class="stats-tab" data-tab="patterns" type="button">Mønstre</button>
+            <button class="stats-tab" data-tab="aims" type="button">Mål &amp; råd</button>
+        </div>
+        <div class="modal-body stats-body">
+            <div class="stats-pane is-active" id="statsOverview"></div>
+            <div class="stats-pane hidden" id="statsPatterns"></div>
+            <div class="stats-pane hidden" id="statsAims"></div>
+        </div>
+    </div>
+</div>
+
 <!-- ============ RESULTS MODAL ============ -->
 <div class="modal-overlay" id="resultsModal">
     <div class="modal">
