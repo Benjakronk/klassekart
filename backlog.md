@@ -1,0 +1,86 @@
+# Klassekart — backlog
+
+Ideas and planned work, roughly in build order. Inspiration drawn from looking at
+peer apps (e.g. klassekartet.no) — concepts only, our own implementations.
+
+## Where we already stand (parity or ahead)
+- Weighted **Må/Bør** rules (most peers are strict-only — we're ahead here)
+- OR-set rules ("ved siden av én av"), editable rules
+- Geometric cluster-aware adjacency (pairs/pods/rows/U + manual clusters)
+- Lock seats, drag & drop, undo/redo, saved chart history
+- Mix-gender, avoid-last-partner, room presets + manual desk editing
+
+## Build order
+
+### 1. Statistics (next major goal)
+Cumulative, per-class data over the whole `state.history`, surfaced in a stats
+view with **data visualizations** to surface patterns. Aim to be *more powerful
+than peer apps'*. Research-grounded — see `docs/research.md`.
+
+Two headline questions frame the dashboards:
+- **"Is the classroom a good environment to be in?"** (relational/belonging climate)
+- **"Are we actually getting work done?"** (engagement/productivity)
+
+Decisions made:
+- Track **adjacency AND co-group separately**, viewable combined or separate.
+- **Saving a chart is required** (no auto-snapshot) — keeps capture intentional.
+- Pursue the **full toolset** across the three data layers below.
+
+Three data layers:
+- **Derived (frictionless):** pairing matrix (adjacency + co-group), never-sat-
+  together, social reach / isolates, most-least paired, coverage %, front/back
+  equity, gender/tag balance over time.
+- **Teacher input (opt-in):** per-chart rating on the two headline questions +
+  notes ✅ (Phase 2 — rate in Historikk; surfaced as «Lærervurdering» indicators
+  + a trend in stats). REMAINING (Phase 2b): student preference input (teacher-
+  entered from a separate session); tag-based grouping/balance.
+- **Imported (sensitive):** teacher–student **Relationship Mapping** data
+  (green/yellow/red/white, both directions) to flag students lacking a positive
+  adult relationship and prompt staff mindfulness. SEE DATA-PROTECTION NOTE.
+
+Visualizations: pairing heatmap matrix, relationship/network graph, coverage &
+climate trend lines, front/back equity bars, relationship-map grid.
+
+### 1b. "Aims → tips" section (research-backed)
+Teacher picks what they're aiming for (e.g. broaden relationships, reduce
+disruption, support an isolated student, heterogeneous grouping, strengthen
+belonging) → gets actionable, cited tips + concrete in-app actions (e.g. seat X
+with someone new, rotate back-row forward). Content library keyed to aims,
+decoupled from the data plumbing. Sourced from `docs/research.md`.
+
+### DATA-PROTECTION NOTE (resolve before building the imported layer)
+Relationship-mapping data = sensitive personal data about minors (GDPR /
+personopplysninger). Plain localStorage + plaintext backup is risky on shared/
+lost devices. Decide: keep this layer optional + separable, store only derived
+flags vs full matrices, passcode-gate, and treat the app as a *support tool* for
+the school's sanctioned process — not the system of record.
+
+### 2. Two-tier avoid-repeat
+- Keep current **avoid last arrangement's neighbours**.
+- Add **avoid ALL past neighbours** (needs the cumulative pairing data from #1).
+
+### 3. One-time rules vs permanent rules
+- "Engangsregler" — constraints that apply to a single generation then discard.
+- Master toggle to ignore permanent class rules for one run.
+
+### 4. Same-gender-together preference
+- Inverse of mix-gender; group by gender. Small `prefs` addition + scorer term.
+
+## Visual / UI polish (after the above, or bundled with a UI pass)
+- **Chair / seat-orientation indicator**: grey full circle behind the desk,
+  protruding one edge = where the student sits. Orient automatically from the
+  cluster logic (faces cluster centre; lone desks face the board). Optional
+  manual rotate override in edit mode.
+- **Coloured initial-avatars** per student (hashed from name) — identity cue,
+  reusable as chips in always/never-with lists.
+- Per-student **always/never-with** shown inline as avatar chips with quick-add.
+- Rules button **count badge** (number of active rules).
+- Per-desk **rotate** + **flip room** + grow grid from any side.
+
+## UI approach (decided)
+No full overhaul. Path:
+1. **Light design audit / guardrails** — done, see `docs/design-notes.md`.
+2. **Build the statistics view with the frontend-design skill** — biggest new
+   surface; make it distinctive, built on the design-notes vocabulary.
+3. **Harmonize older screens as features land** (avatars, badges, chair), then
+   optionally one consolidation pass at the end.
