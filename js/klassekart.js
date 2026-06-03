@@ -137,7 +137,7 @@ function normClass(c) {
         assign: c.assign || {},
         locked: c.locked || [],
         rules: (c.rules || []).map(normRule),
-        prefs: Object.assign({ balanceGender: false, avoidRepeat: false }, c.prefs || {}),
+        prefs: Object.assign({ balanceGender: false, avoidRepeat: false, balanceTags: false }, c.prefs || {}),
         history: c.history || []
     };
 }
@@ -459,7 +459,11 @@ function buildContext() {
             if (a && b) prevPairs.add(pairKey(a, b));
         });
     }
-    return { adj, edges, minY, maxY, seatById, apart, together, genderOf, placeWants, wishWith, wishAvoid, quiet, prevPairs, prefs: state.prefs };
+    // tag balancing: spread same-tag students across co-groups (heterogeneous grouping)
+    const tagBalance = !!state.prefs.balanceTags;
+    const tagsOf = {}; state.students.forEach(s => { tagsOf[s.id] = s.tags || []; });
+    const clusters = tagBalance ? clustersOf(state.seats) : [];
+    return { adj, edges, minY, maxY, seatById, apart, together, genderOf, placeWants, wishWith, wishAvoid, quiet, tagBalance, tagsOf, clusters, prevPairs, prefs: state.prefs };
 }
 
 function scoreAssign(assign, ctx) {
@@ -502,6 +506,12 @@ function scoreAssign(assign, ctx) {
     if (ctx.quiet.size) for (const id of ctx.quiet) {
         const se = seatOf[id];
         if (se) { let nb = 0; ctx.adj[se].forEach(s => { if (assign[s]) nb++; }); score += nb * 6; }
+    }
+    // tag balance: penalise the same tag clumping inside one co-group
+    if (ctx.tagBalance) for (const cl of ctx.clusters) {
+        const counts = {};
+        for (const seatId of cl) { const sid = assign[seatId]; if (!sid) continue; for (const t of (ctx.tagsOf[sid] || [])) counts[t] = (counts[t] || 0) + 1; }
+        for (const t in counts) if (counts[t] > 1) score += (counts[t] - 1) * 8;
     }
     return score;
 }
@@ -1059,6 +1069,7 @@ let editingRuleId = null;
 function openRulesModal() {
     $('prefBalanceGender').checked = !!state.prefs.balanceGender;
     $('prefAvoidRepeat').checked = !!state.prefs.avoidRepeat;
+    $('prefBalanceTags').checked = !!state.prefs.balanceTags;
     fillStudentSelect($('ruleA'));
     fillMemberPicker();
     setRuleEditMode(null);
@@ -1247,15 +1258,36 @@ function fillPrefPicker(box, arr, selfId) {
     });
     if (!box.children.length) box.innerHTML = '<p class="modal-hint">Legg til flere elever først.</p>';
 }
+function renderPrefTags(s) {
+    const box = $('prefTags'); box.innerHTML = '';
+    (s.tags || []).forEach((t, i) => {
+        const chip = document.createElement('span'); chip.className = 'tag-chip';
+        chip.appendChild(document.createTextNode(t));
+        const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕';
+        x.addEventListener('click', () => { s.tags.splice(i, 1); renderPrefTags(s); });
+        chip.appendChild(x); box.appendChild(chip);
+    });
+    if (!(s.tags || []).length) box.innerHTML = '<span class="modal-hint">Ingen merkelapper.</span>';
+}
+function addPrefTag() {
+    if (prefEditIndex < 0) return;
+    const s = rosterWork[prefEditIndex]; s.tags = s.tags || [];
+    const v = $('prefTagInput').value.trim();
+    if (v && s.tags.indexOf(v) === -1) s.tags.push(v);
+    $('prefTagInput').value = '';
+    renderPrefTags(s);
+}
 function openStudentPref(i) {
     prefEditIndex = i;
     const s = rosterWork[i];
-    s.wishWith = s.wishWith || []; s.wishAvoid = s.wishAvoid || [];
+    s.wishWith = s.wishWith || []; s.wishAvoid = s.wishAvoid || []; s.tags = s.tags || [];
     $('prefTitle').textContent = 'Preferanser – ' + (s.name || 'elev');
     $('prefQuiet').checked = !!s.quiet;
+    $('prefTagInput').value = '';
     dotsControl($('prefBelong'), () => s.belong, v => { s.belong = v; });
     fillPrefPicker($('prefWith'), s.wishWith, s.id);
     fillPrefPicker($('prefAvoid'), s.wishAvoid, s.id);
+    renderPrefTags(s);
     openModal('studentPrefModal');
 }
 function closeStudentPref() {
@@ -1543,6 +1575,16 @@ function belongStats() {
     const sum = rated.reduce((a, s) => a + s.belong, 0);
     return { avg: rated.length ? sum / rated.length : null, n: rated.length, low: state.students.filter(s => s.belong && s.belong <= 2) };
 }
+function tagSpreadNow() {
+    if (!state.students.some(s => (s.tags || []).length)) return null;
+    let excess = 0;
+    clustersOf(state.seats).forEach(cl => {
+        const counts = {};
+        cl.forEach(seatId => { const sid = state.assign[seatId]; if (!sid) return; ((studentById(sid) || {}).tags || []).forEach(t => counts[t] = (counts[t] || 0) + 1); });
+        for (const t in counts) if (counts[t] > 1) excess += counts[t] - 1;
+    });
+    return { excess };
+}
 function wishesHonoredNow() {
     const pairs = []; state.students.forEach(s => (s.wishWith || []).forEach(w => pairs.push(pairKey(s.id, w))));
     if (!pairs.length) return { ok: 0, total: 0 };
@@ -1623,6 +1665,7 @@ function renderStatsOverview(st) {
     const ra = currentRuleAdherence();
     const bs = belongStats();
     const wh = wishesHonoredNow();
+    const tg = tagSpreadNow();
 
     const climate = `<div class="q-card"><h3>🌱 Er klasserommet et godt sted å være?</h3>
         <p class="q-sub">Tilhørighet, inkludering og at alle samarbeider bredt.</p>
@@ -1637,6 +1680,7 @@ function renderStatsOverview(st) {
         <p class="q-sub">Engasjement, rettferdig plassering og at reglene holder.</p>
         ${indHtml({ label: 'Aldri sittet foran', val: nf.length, valCls: nf.length ? 'warn' : 'good', note: nf.length ? nf.slice(0, 4).map(s => escapeHtml(s.name)).join(', ') + (nf.length > 4 ? ' …' : '') : 'Tilgangen til de fremre plassene er spredt.' })}
         ${indHtml({ label: 'Kjønnsblanding ved pulter', val: totG ? mix + '%' : '—', pct: totG ? mix : 0, note: totG ? 'Andel nabopar på tvers av kjønn.' : 'Sett kjønn på elevene for å måle dette.' })}
+        ${tg ? indHtml({ label: 'Merkelapp-klumping', val: tg.excess, valCls: tg.excess ? 'warn' : 'good', note: tg.excess ? 'Samme merkelapp i samme gruppe – slå på «Spre merkelapper» og kjør smart plassering.' : 'Merkelapper er godt spredd mellom gruppene.' }) : ''}
         ${indHtml({ label: 'Lærervurdering: arbeid', val: st.workN ? st.avgWork.toFixed(1) + '/5' : '—', valCls: ratingCls(st.avgWork), pct: st.workN ? st.avgWork / 5 * 100 : 0, meterCls: ratingCls(st.avgWork), note: st.workN ? `Snitt av ${st.workN} vurderte kart.` : 'Vurder kart i Historikk for å fylle dette.' })}
         ${ra.total ? indHtml({ label: 'Regler oppfylt nå', val: `${ra.ok}/${ra.total}`, valCls: ra.ok === ra.total ? 'good' : 'warn', pct: pct(ra.ok, ra.total), meterCls: ra.ok === ra.total ? 'good' : 'warn', note: 'Gjeldende kart mot «Må/Bør»-reglene.' }) : indHtml({ label: 'Regler oppfylt nå', val: '—', note: 'Ingen regler satt enda.' })}
     </div>`;
@@ -2100,6 +2144,7 @@ function wireApp() {
     });
     $('prefBalanceGender').addEventListener('change', e => { state.prefs.balanceGender = e.target.checked; save(); });
     $('prefAvoidRepeat').addEventListener('change', e => { state.prefs.avoidRepeat = e.target.checked; save(); });
+    $('prefBalanceTags').addEventListener('change', e => { state.prefs.balanceTags = e.target.checked; save(); });
     $('rulesRunBtn').addEventListener('click', () => { closeModal('rulesModal'); smartArrange(false); });
 
     // roster modal
@@ -2113,6 +2158,8 @@ function wireApp() {
     $('rosterSaveBtn').addEventListener('click', saveRoster);
     // student-preferences modal
     $('prefDoneBtn').addEventListener('click', closeStudentPref);
+    $('prefTagAddBtn').addEventListener('click', addPrefTag);
+    $('prefTagInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addPrefTag(); } });
     $('prefCloseX').addEventListener('click', closeStudentPref);
     $('prefQuiet').addEventListener('change', () => { if (prefEditIndex >= 0 && rosterWork[prefEditIndex]) rosterWork[prefEditIndex].quiet = $('prefQuiet').checked; });
 

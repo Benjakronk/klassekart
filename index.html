@@ -151,6 +151,7 @@
             <div class="rules-globals">
                 <label class="check"><input type="checkbox" id="prefBalanceGender"> Bland kjønn (vekslende gutt/jente)</label>
                 <label class="check"><input type="checkbox" id="prefAvoidRepeat"> Unngå naboer fra forrige lagrede kart</label>
+                <label class="check"><input type="checkbox" id="prefBalanceTags"> Spre merkelapper (blandede grupper)</label>
             </div>
 
             <h3 class="sub">Regler mellom elever</h3>
@@ -230,6 +231,15 @@
                 <h3 class="sub">🚫 Vil helst unngå</h3>
                 <div class="member-picker" id="prefAvoid"></div>
                 <p class="modal-hint" style="margin-top:6px">Sensitivt – vises bare for lærer.</p>
+            </div>
+            <div class="pref-sec">
+                <h3 class="sub">🏷️ Merkelapper</h3>
+                <div class="tag-list" id="prefTags"></div>
+                <div class="tag-add">
+                    <input id="prefTagInput" type="text" placeholder="f.eks. språkstøtte">
+                    <button class="btn" id="prefTagAddBtn" type="button">Legg til</button>
+                </div>
+                <p class="modal-hint" style="margin-top:6px">Brukes til blandede grupper – slå på «Spre merkelapper» i Regler.</p>
             </div>
         </div>
         <div class="modal-foot">

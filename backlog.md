@@ -36,8 +36,9 @@ Three data layers:
   - Phase 2b student preference input ✅ (per-student ⚙︎ editor: sit-with &
     avoid wishes [soft in placement], quiet/space, belonging 1–5). Surfaced as
     «Elevtrivsel» + «Ønsker oppfylt nå» indicators.
-  - REMAINING (Phase 2c): tag-based grouping/balance (use the `tags` field to
-    balance traits across groups + a balance stat + optimizer term).
+  - Phase 2c tag-based grouping ✅ (per-student 🏷️ tags; «Spre merkelapper»
+    pref spreads same-tag students across co-groups; «Merkelapp-klumping» stat).
+  - ✅ PHASE 2 COMPLETE (ratings + student preferences + tag grouping).
 - **Imported (sensitive):** teacher–student **Relationship Mapping** data
   (green/yellow/red/white, both directions) to flag students lacking a positive
   adult relationship and prompt staff mindfulness. SEE DATA-PROTECTION NOTE.
