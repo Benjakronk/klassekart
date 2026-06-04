@@ -75,22 +75,32 @@ personopplysninger). Decisions and how they were built:
 Possible follow-ups: a dedicated relationship-grid visualization in the Mønstre
 tab; auto-lock on idle; per-class passcodes (currently one passcode for all).
 
-### 2. Two-tier avoid-repeat
-- Keep current **avoid last arrangement's neighbours**.
-- Add **avoid ALL past neighbours** (needs the cumulative pairing data from #1).
+### 2. Two-tier avoid-repeat ✅ DONE
+- Keep current **avoid last arrangement's neighbours** (`avoidRepeat`).
+- ✅ Added **avoid ALL past neighbours** (`avoidAllRepeat`): counts how many saved
+  charts each pair shared, penalty = count×10, so repeat partners are avoided
+  more strongly and never-paired students are favoured. Checkbox in Regler.
 
-### 3. One-time rules vs permanent rules
-- "Engangsregler" — constraints that apply to a single generation then discard.
-- Master toggle to ignore permanent class rules for one run.
+### 3. One-time rules vs permanent rules — ❌ WON'T DO (decided)
+Rejected: a rule that self-deletes on generation/session-end is a footgun — a
+user error (regenerating, or a mis-timed session end) could silently wipe rules
+the teacher meant to keep. Tweaking rules between sessions is cheap and visible,
+which is safer. Revisit only if a concrete need appears.
 
 ### 4. Same-gender-together preference
 - Inverse of mix-gender; group by gender. Small `prefs` addition + scorer term.
 
 ## Visual / UI polish (after the above, or bundled with a UI pass)
-- **Chair / seat-orientation indicator**: grey full circle behind the desk,
-  protruding one edge = where the student sits. Orient automatically from the
-  cluster logic (faces cluster centre; lone desks face the board). Optional
-  manual rotate override in edit mode.
+- **Chair / seat-orientation indicator** ✅ DONE: grey disc behind the desk, one
+  edge poking out on the side the student sits. Auto-orientation (`seatChairDirs`):
+  2-D tight clusters (pods, horseshoe) face the cluster centre → chairs outward;
+  1-D runs (side-by-side pairs, columns) and lone desks face the board → chairs to
+  the back. Mirrored in the PNG/PDF export. ✅ Manual rotate override: in
+  desk-edit mode, click a chair to snap it to the next *free* edge
+  (`rotateChair` / `chairAllowedEdges` — edges jammed tight against another desk
+  are excluded; aisle/row gaps count as free). Override stored per-seat
+  (`seat.chair`), survives save & room templates, and auto-reverts if a later
+  desk move blocks that edge.
 - **Coloured initial-avatars** per student (hashed from name) — identity cue,
   reusable as chips in always/never-with lists.
 - Per-student **always/never-with** shown inline as avatar chips with quick-add.

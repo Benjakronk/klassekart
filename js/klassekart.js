@@ -137,7 +137,7 @@ function normClass(c) {
         assign: c.assign || {},
         locked: c.locked || [],
         rules: (c.rules || []).map(normRule),
-        prefs: Object.assign({ balanceGender: false, avoidRepeat: false, balanceTags: false }, c.prefs || {}),
+        prefs: Object.assign({ balanceGender: false, avoidRepeat: false, avoidAllRepeat: false, balanceTags: false }, c.prefs || {}),
         history: c.history || []
     };
 }
@@ -459,11 +459,25 @@ function buildContext() {
             if (a && b) prevPairs.add(pairKey(a, b));
         });
     }
+    // avoid ALL past neighbours: count how many saved charts each pair sat together,
+    // so repeat offenders are penalised more and the optimiser favours new pairings.
+    let pastPairs = null;
+    if (state.prefs.avoidAllRepeat && state.history.length) {
+        pastPairs = new Map();
+        state.history.forEach(snap => {
+            const seatsP = snap.seats || []; if (!seatsP.length) return;
+            const { edges: pe } = computeAdjacency(seatsP, snap.room);
+            pe.forEach(([s1, s2]) => {
+                const a = (snap.assign || {})[s1], b = (snap.assign || {})[s2];
+                if (a && b) { const k = pairKey(a, b); pastPairs.set(k, (pastPairs.get(k) || 0) + 1); }
+            });
+        });
+    }
     // tag balancing: spread same-tag students across co-groups (heterogeneous grouping)
     const tagBalance = !!state.prefs.balanceTags;
     const tagsOf = {}; state.students.forEach(s => { tagsOf[s.id] = s.tags || []; });
     const clusters = tagBalance ? clustersOf(state.seats) : [];
-    return { adj, edges, minY, maxY, seatById, apart, together, genderOf, placeWants, wishWith, wishAvoid, quiet, tagBalance, tagsOf, clusters, prevPairs, prefs: state.prefs };
+    return { adj, edges, minY, maxY, seatById, apart, together, genderOf, placeWants, wishWith, wishAvoid, quiet, tagBalance, tagsOf, clusters, prevPairs, pastPairs, prefs: state.prefs };
 }
 
 function scoreAssign(assign, ctx) {
@@ -479,6 +493,7 @@ function scoreAssign(assign, ctx) {
         if (apartSt) score += apartSt === 'must' ? 1000 : 30;
         if (ctx.prefs.balanceGender && ctx.genderOf[a] && ctx.genderOf[b] && ctx.genderOf[a] === ctx.genderOf[b]) score += 4;
         if (ctx.prefs.avoidRepeat && ctx.prevPairs.has(k)) score += 10;
+        if (ctx.pastPairs) { const c = ctx.pastPairs.get(k); if (c) score += c * 10; } // more shared charts = stronger nudge to a new partner
     }
     // together: satisfied if a neighbours at least one member of the set
     for (const t of ctx.together) {
@@ -632,6 +647,68 @@ function rowLine(ok, txt) {
 }
 
 /* ----------------------------------------------------------------- render   */
+/* Which edge each desk's chair pokes out of (= where the student sits, opposite
+ * the way they face). A 2-D tight cluster (pod, horseshoe) → face the cluster
+ * centre, so chairs point outward; a 1-D run (a side-by-side pair, a column) and
+ * lone desks → face the board, so chairs point to the back. */
+const CHAIR_D = 52, CHAIR_POKE = 18;
+function seatChairDirs() {
+    const byId = {}; state.seats.forEach(s => byId[s.id] = s);
+    const dirOf = {};
+    clustersOf(state.seats).forEach(cl => {
+        const xs = new Set(), ys = new Set();
+        cl.forEach(id => { xs.add(Math.round(byId[id].x / 4)); ys.add(Math.round(byId[id].y / 4)); });
+        if (!(xs.size > 1 && ys.size > 1)) { cl.forEach(id => dirOf[id] = 'down'); return; } // 1-D run faces board
+        let cx = 0, cy = 0;
+        cl.forEach(id => { cx += byId[id].x + SEAT_W / 2; cy += byId[id].y + SEAT_H / 2; });
+        cx /= cl.length; cy /= cl.length;
+        cl.forEach(id => {
+            const dx = (byId[id].x + SEAT_W / 2) - cx, dy = (byId[id].y + SEAT_H / 2) - cy;
+            dirOf[id] = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+        });
+    });
+    state.seats.forEach(s => { if (!(s.id in dirOf)) dirOf[s.id] = 'down'; }); // lone desk → face board
+    // manual override wins, but only if that edge is still free (not jammed against a desk)
+    state.seats.forEach(s => { if (s.chair && chairAllowedEdges(s).indexOf(s.chair) !== -1) dirOf[s.id] = s.chair; });
+    return dirOf;
+}
+/* Edges where a chair fits — i.e. no desk pushed tightly against that side.
+ * Aisle/row gaps leave room to sit; within-cluster (tight) gaps do not. */
+function chairAllowedEdges(seat) {
+    const out = [];
+    const blocked = dir => state.seats.some(b => {
+        if (b.id === seat.id) return false;
+        const sameRow = Math.abs(b.y - seat.y) <= SEAT_H * 0.5, sameCol = Math.abs(b.x - seat.x) <= SEAT_W * 0.5;
+        if (dir === 'right') return sameRow && b.x > seat.x && b.x - seat.x - SEAT_W <= ADJ_TIGHT_H;
+        if (dir === 'left') return sameRow && b.x < seat.x && seat.x - b.x - SEAT_W <= ADJ_TIGHT_H;
+        if (dir === 'down') return sameCol && b.y > seat.y && b.y - seat.y - SEAT_H <= ADJ_TIGHT_V;
+        return sameCol && b.y < seat.y && seat.y - b.y - SEAT_H <= ADJ_TIGHT_V; // up
+    });
+    ['up', 'right', 'down', 'left'].forEach(d => { if (!blocked(d)) out.push(d); });
+    return out;
+}
+/* Rotate a desk's chair to the next free edge (edit mode). */
+function rotateChair(seatId) {
+    const seat = state.seats.find(s => s.id === seatId);
+    if (!seat) return;
+    const allowed = chairAllowedEdges(seat);
+    if (allowed.length < 2) { toast('Ingen ledige kanter å snu stolen til', 'err'); return; }
+    const shown = (seat.chair && allowed.indexOf(seat.chair) !== -1) ? seat.chair : seatChairDirs()[seatId];
+    const next = allowed[(allowed.indexOf(shown) + 1) % allowed.length];
+    pushUndo();
+    seat.chair = next;
+    state.roomMode = 'custom';
+    save(); render();
+}
+/* top-left of the chair circle (board coords) for a given desk + direction */
+function chairXY(seat, dir) {
+    const cxL = seat.x + (SEAT_W - CHAIR_D) / 2, cyT = seat.y + (SEAT_H - CHAIR_D) / 2;
+    if (dir === 'up') return [cxL, seat.y - CHAIR_POKE];
+    if (dir === 'left') return [seat.x - CHAIR_POKE, cyT];
+    if (dir === 'right') return [seat.x + SEAT_W - CHAIR_D + CHAIR_POKE, cyT];
+    return [cxL, seat.y + SEAT_H - CHAIR_D + CHAIR_POKE]; // down
+}
+
 function render() {
     renderBoard();
     renderPool();
@@ -647,7 +724,16 @@ function renderBoard() {
     } else { boardW = SEAT_W; boardH = SEAT_H; }
     board.style.width = boardW + 'px';
     board.style.height = boardH + 'px';
+    const chairDirs = seatChairDirs();
     for (const seat of state.seats) {
+        {
+            const [cl, ct] = chairXY(seat, chairDirs[seat.id]);
+            const chair = document.createElement('div');
+            chair.className = 'chair' + (editMode ? ' chair-edit' : '');
+            if (editMode) { chair.dataset.seatId = seat.id; chair.title = 'Klikk for å snu stolen til neste ledige kant'; }
+            chair.style.left = cl + 'px'; chair.style.top = ct + 'px';
+            board.appendChild(chair);
+        }
         const seatEl = document.createElement('div');
         seatEl.className = 'seat';
         seatEl.style.left = seat.x + 'px';
@@ -831,6 +917,17 @@ function clientToBoard(cx, cy) {
     return { x: (cx - rect.left) / s, y: (cy - rect.top) / s };
 }
 function snap(v, step) { return Math.round(v / step) * step; }
+/* Grow the room on the left/top: if any desk has been dragged into negative
+ * space, shift every desk back by whole grid steps so the minimum is ≥ 0. Whole
+ * steps keep the lattice (and existing pair offsets) aligned. Returns the shift. */
+function growToFit() {
+    if (!state.seats.length) return { ox: 0, oy: 0 };
+    const minX = Math.min(...state.seats.map(s => s.x)), minY = Math.min(...state.seats.map(s => s.y));
+    const ox = minX < 0 ? Math.ceil(-minX / GRID_X) * GRID_X : 0;
+    const oy = minY < 0 ? Math.ceil(-minY / GRID_Y) * GRID_Y : 0;
+    if (ox || oy) state.seats.forEach(s => { s.x += ox; s.y += oy; });
+    return { ox, oy };
+}
 /* per-axis snap: lands on the lattice, but if the desk is dragged close to a
  * neighbour in the same row/column it clicks into a tidy pair gap or separation
  * gap — this is how you build "pairs with a gap between" in either direction.
@@ -845,16 +942,21 @@ function snapEditAxis(raw, crossVal, axis, selfId) {
     const sep = horiz ? SEP_DX : SEP_DY;
     let n = snap(raw, step);
     let best = Math.abs(n - raw);
+    const consider = cand => { const d = Math.abs(cand - raw); if (d <= PAIR_SNAP && d < best) { best = d; n = cand; } };
+    const sameBand = [], adjBand = [];
     for (const s of state.seats) {
         if (s.id === selfId) continue;
-        const sCross = horiz ? s.y : s.x;
-        if (Math.abs(sCross - crossVal) > crossStep * 0.5) continue; // same row/column band
-        const sMain = horiz ? s.x : s.y;
-        for (const cand of [sMain + pair, sMain - pair, sMain + sep, sMain - sep]) {
-            const d = Math.abs(cand - raw);
-            if (d <= PAIR_SNAP && d < best) { best = d; n = cand; }
-        }
+        const cd = Math.abs((horiz ? s.y : s.x) - crossVal), sMain = horiz ? s.x : s.y;
+        if (cd <= crossStep * 0.5) sameBand.push(sMain);          // same row (x) / column (y)
+        else if (cd <= crossStep * 1.5) adjBand.push(sMain);      // one row / column away
     }
+    // same band: click into a tidy pair or separation gap on either side
+    sameBand.forEach(m => { consider(m + pair); consider(m - pair); consider(m + sep); consider(m - sep); });
+    // adjacent band: line up directly (column under a desk) or centre between two
+    // nearby desks — the half-step that makes a group of three (pyramid) snap.
+    adjBand.forEach(consider);
+    for (let i = 0; i < adjBand.length; i++) for (let j = i + 1; j < adjBand.length; j++)
+        if (Math.abs(adjBand[i] - adjBand[j]) <= 2 * step) consider((adjBand[i] + adjBand[j]) / 2);
     return n;
 }
 
@@ -878,6 +980,8 @@ function exitEditMode() {
 }
 
 function onEditPointerDown(e) {
+    const chairEl = e.target.closest('.chair');
+    if (chairEl) { suppressClick = true; rotateChair(chairEl.dataset.seatId); e.preventDefault(); return; } // rotate, don't drag/add
     if (e.target.closest('.seat-del')) return; // deletion handled on click
     const seatEl = e.target.closest('.seat');
     const start = { x: e.clientX, y: e.clientY };
@@ -911,9 +1015,17 @@ function onEditMove(e) {
         nx = snapEditAxis(rx, gy, 'x', deskDrag.seat.id);
         ny = snapEditAxis(ry, gx, 'y', deskDrag.seat.id);
     }
-    nx = Math.max(0, nx); ny = Math.max(0, ny);
     deskDrag.seat.x = nx; deskDrag.seat.y = ny;
-    if (deskDrag.el) { deskDrag.el.style.left = nx + 'px'; deskDrag.el.style.top = ny + 'px'; }
+    // No origin clamp: dragging left/up past 0 grows the room on that side. When
+    // that happens we re-base everyone and re-render, then re-grab the dragged el.
+    const { ox, oy } = growToFit();
+    if (ox || oy) {
+        deskDrag.originX += ox; deskDrag.originY += oy;
+        render();
+        deskDrag.el = $('board').querySelector('.seat[data-seat-id="' + deskDrag.seat.id + '"]');
+    } else if (deskDrag.el) {
+        deskDrag.el.style.left = deskDrag.seat.x + 'px'; deskDrag.el.style.top = deskDrag.seat.y + 'px';
+    }
 }
 function onEditUp(e) {
     window.removeEventListener('pointermove', onEditMove);
@@ -927,10 +1039,11 @@ function onEditUp(e) {
 function addSeatAt(cx, cy) {
     pushUndo();
     const p = clientToBoard(cx, cy);
-    let x = Math.max(0, snap(p.x - SEAT_W / 2, GRID_X));
-    let y = Math.max(0, snap(p.y - SEAT_H / 2, GRID_Y));
+    let x = snap(p.x - SEAT_W / 2, GRID_X);
+    let y = snap(p.y - SEAT_H / 2, GRID_Y);
     while (state.seats.some(s => Math.abs(s.x - x) < 4 && Math.abs(s.y - y) < 4)) x += GRID_X; // avoid stacking
     state.seats.push({ id: newSeatId(), x, y });
+    growToFit(); // a click in the left/top margin lands at negative coords — grow instead of clamp
     state.roomMode = 'custom';
     save(); render();
 }
@@ -1069,6 +1182,7 @@ let editingRuleId = null;
 function openRulesModal() {
     $('prefBalanceGender').checked = !!state.prefs.balanceGender;
     $('prefAvoidRepeat').checked = !!state.prefs.avoidRepeat;
+    $('prefAvoidAll').checked = !!state.prefs.avoidAllRepeat;
     $('prefBalanceTags').checked = !!state.prefs.balanceTags;
     fillStudentSelect($('ruleA'));
     fillMemberPicker();
@@ -1326,7 +1440,7 @@ function updateRoomConfigUI() {
 /* ---- saved room arrangements (shared across classes, stored on the store) -- */
 function ensureTemplates() { if (store && !store.roomTemplates) store.roomTemplates = []; }
 function normalizeSeatList(seats) {
-    const out = seats.map(s => ({ x: s.x, y: s.y }));
+    const out = seats.map(s => s.chair ? { x: s.x, y: s.y, chair: s.chair } : { x: s.x, y: s.y });
     if (out.length) {
         const mnX = Math.min(...out.map(s => s.x)), mnY = Math.min(...out.map(s => s.y));
         out.forEach(s => { s.x -= mnX; s.y -= mnY; });
@@ -1349,7 +1463,7 @@ function applyRoomTemplate(id) {
     if (!t) return;
     pushUndo();
     const order = state.students.map(s => s.id);
-    state.seats = (t.seats || []).map((s, i) => ({ id: 'seat' + i, x: s.x, y: s.y }));
+    state.seats = (t.seats || []).map((s, i) => s.chair ? { id: 'seat' + i, x: s.x, y: s.y, chair: s.chair } : { id: 'seat' + i, x: s.x, y: s.y });
     state.roomMode = 'custom';
     state.assign = {};
     state.locked = [];
@@ -2210,6 +2324,15 @@ function drawSeatingToCanvas(scale) {
     ctx.textAlign = 'center';
     ctx.fillText('TAVLE / FRONT', ox + (boardW * scale) / 2, oy - 30 + fh / 2 + 1);
     ctx.textAlign = 'left';
+    // chairs (behind desks) — same orientation logic as the on-screen board
+    const chairDirs = seatChairDirs();
+    ctx.fillStyle = '#d7dae9';
+    for (const seat of state.seats) {
+        const [cl, ct] = chairXY(seat, chairDirs[seat.id]);
+        ctx.beginPath();
+        ctx.arc(ox + (cl + CHAIR_D / 2) * scale, oy + (ct + CHAIR_D / 2) * scale, (CHAIR_D / 2) * scale, 0, Math.PI * 2);
+        ctx.fill();
+    }
     // seats
     for (const seat of state.seats) {
         const x = ox + seat.x * scale, y = oy + seat.y * scale, w = SEAT_W * scale, h = SEAT_H * scale;
@@ -2412,6 +2535,7 @@ function wireApp() {
     });
     $('prefBalanceGender').addEventListener('change', e => { state.prefs.balanceGender = e.target.checked; save(); });
     $('prefAvoidRepeat').addEventListener('change', e => { state.prefs.avoidRepeat = e.target.checked; save(); });
+    $('prefAvoidAll').addEventListener('change', e => { state.prefs.avoidAllRepeat = e.target.checked; save(); });
     $('prefBalanceTags').addEventListener('change', e => { state.prefs.balanceTags = e.target.checked; save(); });
     $('rulesRunBtn').addEventListener('click', () => { closeModal('rulesModal'); smartArrange(false); });
 

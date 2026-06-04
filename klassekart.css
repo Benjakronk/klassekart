@@ -381,7 +381,20 @@ input[type=number]:focus {
     border: 2px dashed #cdd1e4;
     background: rgba(255,255,255,0.5);
     transition: border-color .12s, background .12s, box-shadow .12s;
+    z-index: 1;
 }
+/* seat-orientation indicator: a grey disc behind the desk, one edge poking out
+ * on the side the student sits. Painted before the desk (lower in the board). */
+.chair {
+    position: absolute;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: #d7dae9;
+    z-index: 0;
+}
+.chair-edit { cursor: pointer; transition: background .12s, box-shadow .12s; }
+.chair-edit:hover { background: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
 .seat.occupied {
     border-style: solid;
     border-color: var(--line);
